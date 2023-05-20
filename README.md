@@ -1,0 +1,2 @@
+# paperbot
+Discord ArXiV bot
