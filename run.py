@@ -1,15 +1,15 @@
+import asyncio
 import logging
 import os
-import uuid
-from io import BytesIO
-from datetime import datetime
-from typing import Any, Dict, List, Union
 import re
+from datetime import datetime
+from typing import Dict, List, Union
+
 import arxiv
 import discord
-from discord.ext import commands
-
-import requests
+import google.generativeai as genai
+import openai
+import transformers
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
@@ -43,9 +43,9 @@ def set_openai_key(key=None):
             log.warning("OpenAI API key not found.")
             return
     os.environ["OPENAI_API_KEY"] = key
-    import openai
     openai.api_key = key
     log.info("OpenAI API key set.")
+
 
 def set_discord_key(key=None):
     if key is None:
@@ -58,6 +58,7 @@ def set_discord_key(key=None):
     os.environ["DISCORD_API_KEY"] = key
     log.info("Discord API key set.")
 
+
 def set_huggingface_key(key=None):
     if key is None:
         try:
@@ -69,6 +70,7 @@ def set_huggingface_key(key=None):
     os.environ["HUGGINGFACE_API_KEY"] = key
     log.info("HuggingFace API key set.")
 
+
 def set_palm_key(key=None):
     if key is None:
         try:
@@ -78,14 +80,19 @@ def set_palm_key(key=None):
             log.warning("Palm API key not found.")
             return
     os.environ["PALM_API_KEY"] = key
-    import google.generativeai as genai
+
     genai.configure(api_key=key)
     log.info("Palm API key set.")
 
+
 def palm_text(prompt):
     """https://developers.generativeai.google/tutorials/text_quickstart"""
-    import google.generativeai as palm
-    models = [m for m in palm.list_models() if 'generateText' in m.supported_generation_methods]
+
+    models = [
+        m
+        for m in palm.list_models()
+        if "generateText" in m.supported_generation_methods
+    ]
     model = models[0].name
     print(model)
 
@@ -98,10 +105,9 @@ def palm_text(prompt):
 
     return completion.result
 
+
 def palm_chat(prompt, context, examples=None):
     """https://developers.generativeai.google/tutorials/chat_quickstart"""
-    import google.generativeai as palm
-
     # # An array of "ideal" interactions between the user and the model
     # examples = [
     #     ("What's up?", # A hypothetical user input
@@ -110,14 +116,13 @@ def palm_chat(prompt, context, examples=None):
     #     ("I'm kind of bored",z
     #     "How can you be bored when there are so many fun, exciting, beautiful experiences to be had in the world? 🌈")
     # ]
-
     response = palm.chat(
-    context=context,
-    examples=examples,
-    messages=prompt,
+        context=context,
+        examples=examples,
+        messages=prompt,
     )
-
     return response.last
+
 
 def find_paper(url: str) -> arxiv.Result:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
@@ -129,6 +134,7 @@ def find_paper(url: str) -> arxiv.Result:
         return paper
     else:
         return None
+
 
 def paper_blurb(paper: arxiv.Result) -> str:
     title = paper.title
@@ -146,7 +152,6 @@ def paper_blurb(paper: arxiv.Result) -> str:
     return blurb
 
 
-
 def gpt_chat(context, prompt, examples=None):
     # TODO: examples converts tuples into gpt dict format
     return gpt_text(prompt, system=context)
@@ -160,7 +165,6 @@ def gpt_text(
     max_tokens: int = 32,
     stop: List[str] = ["\n"],
 ):
-    import openai
     if isinstance(prompt, str):
         prompt = [{"role": "user", "content": prompt}]
     elif prompt is None:
@@ -179,27 +183,37 @@ def gpt_text(
 
 
 class PaperBot(discord.Client):
-    async def on_ready(self):
-        log.info(f'We have logged in as {self.user}')
+    """
+    https://github.com/Rapptz/discord.py/tree/master/examples
+    """
 
-    async def on_msg(self, msg):
-        if msg.author == self.user:
+    async def on_ready(self):
+        log.info(f"We have logged in as {self.user}")
+
+    async def on_message(self, msg):
+        # we do not want the bot to reply to itself
+        if msg.author.id == self.user.id:
             return
 
-        arxiv_link_pattern = r'(https?:\/\/arxiv\.org\/[a-z]+\/[\w\.]+)'
+        arxiv_link_pattern = r"(https?:\/\/arxiv\.org\/[a-z]+\/[\w\.]+)"
         links = re.findall(arxiv_link_pattern, msg.content)
 
         if links:
-            await msg.channel.send(f'I found the following arXiv links in your msg: {", ".join(links)}')
-
+            try:
+                await msg.channel.send(
+                    f'I found the following arXiv links in your msg: {", ".join(links)}'
+                )
+            except asyncio.TimeoutError:
+                return await msg.channel.send(
+                    f"Sorry, you took too long it was {answer}."
+                )
 
 
 if __name__ == "__main__":
-    
     set_discord_key()
-    # set_huggingface_key()
-    # set_openai_key()
-    # set_palm_key()
+    set_huggingface_key()
+    set_openai_key()
+    set_palm_key()
 
     intents = discord.Intents.default()
     intents.message_content = True
