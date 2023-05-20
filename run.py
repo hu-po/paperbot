@@ -3,13 +3,13 @@ import os
 import uuid
 from io import BytesIO
 from datetime import datetime
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Union
 import re
 import arxiv
 import discord
+from discord.ext import commands
 
 import requests
-from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
@@ -168,7 +168,7 @@ def gpt_text(
     if system is not None:
         prompt = [{"role": "system", "content": system}] + prompt
     log.debug(f"Function call to GPT {model}: \n {prompt}")
-    response = openai.ChatCompletion.create(
+    response: Dict = openai.ChatCompletion.create(
         messages=prompt,
         model=model,
         temperature=temperature,
@@ -178,78 +178,30 @@ def gpt_text(
     return response["choices"][0]["message"]["content"]
 
 
-def gpt_emoji(prompt):
-    try:
-        emoji = gpt_text(
-            prompt=prompt,
-            system=" ".join(
-                [
-                    "Respond with a single emoji based on the user prompt.",
-                    "Respond with only basic original emoji.",
-                    "Respond with only one emoji.",
-                    "Do not explain, respond with the single emoji only.",
-                ]
-            ),
-            temperature=0.3,
-        )
-    except Exception:
-        emoji = "👻"
-    return emoji
+class PaperBot(discord.Client):
+    async def on_ready(self):
+        log.info(f'We have logged in as {self.user}')
+
+    async def on_msg(self, msg):
+        if msg.author == self.user:
+            return
+
+        arxiv_link_pattern = r'(https?:\/\/arxiv\.org\/[a-z]+\/[\w\.]+)'
+        links = re.findall(arxiv_link_pattern, msg.content)
+
+        if links:
+            await msg.channel.send(f'I found the following arXiv links in your msg: {", ".join(links)}')
 
 
-def gpt_color():
-    try:
-        color_name = gpt_text(
-            system=" ".join(
-                [
-                    "You generate unique and interesting colors for a crayon set.",
-                    "Crayon color names are only a few words.",
-                    "Respond with the colors only: no extra text or explanations.",
-                ]
-            ),
-            temperature=0.99,
-        )
-        rgb = gpt_text(
-            prompt=color_name,
-            system=" ".join(
-                [
-                    "You generate RGB color tuples for digital art based on word descriptions.",
-                    "Respond with three integers in the range 0 to 255 representing R, G, and B.",
-                    "The three integers should be separated by commas, without spaces.",
-                    "Respond with the colors only: no extra text or explanations.",
-                ]
-            ),
-            temperature=0.1,
-        )
-        rgb = rgb.split(",")
-        assert len(rgb) == 3
-        rgb = tuple([int(x) for x in rgb])
-        assert all([0 <= x <= 256 for x in rgb])
-    except Exception:
-        color_name = "black"
-        rgb = (0, 0, 0)
-    return rgb, color_name
-
-
-def gpt_image(
-    prompt: str,
-    n: int = 1,
-    image_size="512x512",
-):
-    import openai
-    log.debug(f"Image call to GPT with: \n {prompt}")
-    response = openai.Image.create(
-        prompt=prompt,
-        n=n,
-        size=image_size,
-    )
-    img_url = response["data"][0]["url"]
-    image = Image.open(BytesIO(requests.get(img_url).content))
-    # Output path for original image
-    image_name = uuid.uuid4()
-    image_path = os.path.join(DATA_DIR, f"{image_name}.png")
-    image.save(image_path)
-    return image_path
 
 if __name__ == "__main__":
-    pass
+    
+    set_discord_key()
+    # set_huggingface_key()
+    # set_openai_key()
+    # set_palm_key()
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    client = PaperBot(intents=intents)
+    client.run(os.environ["DISCORD_API_KEY"])
