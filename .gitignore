@@ -3,6 +3,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Keys
+.keys/
+
+# C extensions
+*.so
+
+# Models
+*.pth
+
 # C extensions
 *.so
 

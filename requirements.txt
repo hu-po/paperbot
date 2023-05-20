@@ -1,0 +1,5 @@
+discord.py
+arxiv
+openai
+transformers
+google-generativeai
