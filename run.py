@@ -185,6 +185,18 @@ def gpt_text(
 class PaperBot(discord.Client):
     """
     https://github.com/Rapptz/discord.py/tree/master/examples
+
+
+    on message
+    - check for arxiv link
+    - if link, get paper blurb
+    - send paper blurb
+    - start post task
+
+    post task:
+    - add paper to priority queue, priority based on votes?
+    - add paper to static db (txt file? notion? google big table? google sheets?)
+    - post current paper queue to channel (every X amount of time?)
     """
 
     async def on_ready(self):
