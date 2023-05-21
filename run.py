@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import re
@@ -7,9 +6,8 @@ from typing import Dict, Iterator, List, Union
 
 import arxiv
 import discord
-import google.generativeai as genai
+import google.generativeai as palm
 import openai
-import transformers
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
@@ -33,6 +31,12 @@ DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 log.info(f"DATA_DIR: {DATA_DIR}")
 
+PAPER_SOURCES: str = """
+[Twitter](https://twitter.com/i/lists/1653485531546767361)
+[PapersWithCode](https://paperswithcode.com/)
+[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
+[ArxivSanity](http://www.arxiv-sanity.com/)
+"""
 
 def set_openai_key(key=None):
     if key is None:
@@ -51,11 +55,14 @@ def set_discord_key(key=None):
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "discord.txt"), "r") as f:
-                key = f.read()
+                _ = f.read()
+                client_id, client_secret, bot_token = _.split(",")
         except FileNotFoundError:
             log.warning("Discord API key not found.")
             return
-    os.environ["DISCORD_API_KEY"] = key
+    os.environ["DISCORD_CLIENT_ID"] = client_id
+    os.environ["DISCORD_CLIENT_SECRET"] = client_secret
+    os.environ["DISCORD_BOT_TOKEN"] = bot_token
     log.info("Discord API key set.")
 
 
@@ -80,8 +87,7 @@ def set_palm_key(key=None):
             log.warning("Palm API key not found.")
             return
     os.environ["PALM_API_KEY"] = key
-
-    genai.configure(api_key=key)
+    palm.configure(api_key=key)
     log.info("Palm API key set.")
 
 
@@ -122,7 +128,6 @@ def palm_chat(prompt, context, examples=None):
         messages=prompt,
     )
     return response.last
-
 
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
