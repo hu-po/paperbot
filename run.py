@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Union
+from typing import Dict, Iterator, List, Union
 
 import arxiv
 import discord
@@ -124,16 +124,14 @@ def palm_chat(prompt, context, examples=None):
     return response.last
 
 
-def find_paper(url: str) -> arxiv.Result:
+def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
-    match = re.search(pattern, url)
-    if match:
+    matches = re.findall(pattern, msg)
+    for match in matches:
         arxiv_id = match.group(1)
         search = arxiv.Search(id_list=[arxiv_id])
-        paper = next(search.results())
-        return paper
-    else:
-        return None
+        for paper in search.results():
+            yield paper
 
 
 def paper_blurb(paper: arxiv.Result) -> str:
@@ -143,8 +141,7 @@ def paper_blurb(paper: arxiv.Result) -> str:
     url = paper.pdf_url
     blurb = f"""
 ----- 📝 ArXiV -----
-{url}
-{title}
+[{title}]({url})
 {published}
 {", ".join(authors)}
 --------------------
@@ -182,6 +179,17 @@ def gpt_text(
     return response["choices"][0]["message"]["content"]
 
 
+class FakeDB(object):
+    def __init__(self):
+        self.papers = {}
+
+    def add_paper(self, paper: arxiv.Result):
+        self.papers[paper.get_short_id()] = paper
+
+    def get_papers(self, id: str):
+        return self.papers[id]
+
+
 class PaperBot(discord.Client):
     """
     https://github.com/Rapptz/discord.py/tree/master/examples
@@ -199,6 +207,10 @@ class PaperBot(discord.Client):
     - post current paper queue to channel (every X amount of time?)
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.db = FakeDB()
+
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
 
@@ -206,19 +218,17 @@ class PaperBot(discord.Client):
         # we do not want the bot to reply to itself
         if msg.author.id == self.user.id:
             return
-
-        arxiv_link_pattern = r"(https?:\/\/arxiv\.org\/[a-z]+\/[\w\.]+)"
-        links = re.findall(arxiv_link_pattern, msg.content)
-
-        if links:
-            try:
-                await msg.channel.send(
-                    f'I found the following arXiv links in your msg: {", ".join(links)}'
-                )
-            except asyncio.TimeoutError:
-                return await msg.channel.send(
-                    f"Sorry, you took too long it was {answer}."
-                )
+        log.debug(f"Received message: {msg.content}")
+        for paper in find_papers(msg.content):
+            log.info(f"Found paper: {paper.title}")
+            id = paper.get_short_id()
+            if self.db.get_papers(id) is None:
+                self.db.add_paper(paper)
+            else:
+                log.info(f"Paper {id} already in DB, skipping.")
+                continue
+            blurb = paper_blurb(paper)
+            await msg.channel.send(blurb)
 
 
 if __name__ == "__main__":
