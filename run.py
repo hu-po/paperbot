@@ -6,7 +6,7 @@ from typing import Dict, Iterator, List, Union
 
 import arxiv
 import discord
-import google.generativeai as palm
+# import google.generativeai as palm
 import openai
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +18,7 @@ ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 log.addHandler(ch)
 # Set up file handler
-fh = logging.FileHandler(f'_paperbot_{datetime.now().strftime("%D%M%Y")}.log')
+fh = logging.FileHandler(f'_paperbot_{datetime.now().strftime("%d%m%y")}.log')
 fh.setLevel(logging.DEBUG)
 fh.setFormatter(formatter)
 log.addHandler(fh)
@@ -56,13 +56,12 @@ def set_discord_key(key=None):
         try:
             with open(os.path.join(KEYS_DIR, "discord.txt"), "r") as f:
                 _ = f.read()
-                client_id, client_secret, bot_token = _.split(",")
+                bot_token, channel_id = _.split(",")
         except FileNotFoundError:
             log.warning("Discord API key not found.")
             return
-    os.environ["DISCORD_CLIENT_ID"] = client_id
-    os.environ["DISCORD_CLIENT_SECRET"] = client_secret
     os.environ["DISCORD_BOT_TOKEN"] = bot_token
+    os.environ["DISCORD_CHANNEL_ID"] = channel_id
     log.info("Discord API key set.")
 
 
@@ -87,7 +86,7 @@ def set_palm_key(key=None):
             log.warning("Palm API key not found.")
             return
     os.environ["PALM_API_KEY"] = key
-    palm.configure(api_key=key)
+    # palm.configure(api_key=key)
     log.info("Palm API key set.")
 
 
@@ -132,8 +131,7 @@ def palm_chat(prompt, context, examples=None):
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
-    for match in matches:
-        arxiv_id = match.group(1)
+    for arxiv_id in matches:
         search = arxiv.Search(id_list=[arxiv_id])
         for paper in search.results():
             yield paper
@@ -144,7 +142,7 @@ def paper_blurb(paper: arxiv.Result) -> str:
     authors: List[str] = [author.name for author in paper.authors]
     published = paper.published.strftime("%m/%d/%Y")
     url = paper.pdf_url
-    blurb = f"""
+    blurb = f"""\n
 ----- 📝 ArXiV -----
 [{title}]({url})
 {published}
@@ -192,7 +190,7 @@ class FakeDB(object):
         self.papers[paper.get_short_id()] = paper
 
     def get_papers(self, id: str):
-        return self.papers[id]
+        return self.papers.get(id, None)
 
 
 class PaperBot(discord.Client):
@@ -215,9 +213,11 @@ class PaperBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = FakeDB()
+        self.channel_id = int(os.environ.get("DISCORD_CHANNEL_ID"))
 
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
+        await self.get_channel(self.channel_id).send("🗃️paperbot is here!")
 
     async def on_message(self, msg):
         # we do not want the bot to reply to itself
@@ -233,7 +233,7 @@ class PaperBot(discord.Client):
                 log.info(f"Paper {id} already in DB, skipping.")
                 continue
             blurb = paper_blurb(paper)
-            await msg.channel.send(blurb)
+            await self.get_channel(self.channel_id).send(blurb)
 
 
 if __name__ == "__main__":
@@ -245,4 +245,4 @@ if __name__ == "__main__":
     intents = discord.Intents.default()
     intents.message_content = True
     client = PaperBot(intents=intents)
-    client.run(os.environ["DISCORD_API_KEY"])
+    client.run(os.environ["DISCORD_BOT_TOKEN"])
