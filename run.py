@@ -36,6 +36,7 @@ PAPER_SOURCES: str = """
 [PapersWithCode](https://paperswithcode.com/)
 [Reddit](https://www.reddit.com/user/deephugs/m/ml/)
 [ArxivSanity](http://www.arxiv-sanity.com/)
+[LabML](https://papers.labml.ai/papers/weekly/)
 """
 
 def set_openai_key(key=None):
