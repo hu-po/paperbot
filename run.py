@@ -56,13 +56,11 @@ def set_discord_key(key=None):
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "discord.txt"), "r") as f:
-                _ = f.read()
-                bot_token, channel_id = _.split(",")
+                bot_token = f.read()
         except FileNotFoundError:
             log.warning("Discord API key not found.")
             return
     os.environ["DISCORD_BOT_TOKEN"] = bot_token
-    os.environ["DISCORD_CHANNEL_ID"] = channel_id
     log.info("Discord API key set.")
 
 
