@@ -9,6 +9,13 @@ import discord
 import openai
 # import google.generativeai as palm
 
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+LOG_DIR = os.path.join(ROOT_DIR, "logs")
+
+os.makedirs(LOG_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
 formatter = logging.Formatter("🗃️|%(asctime)s|%(message)s")
@@ -18,26 +25,17 @@ ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 log.addHandler(ch)
 # Set up file handler
-fh = logging.FileHandler(f'_paperbot_{datetime.now().strftime("%d%m%y")}.log')
+logfile_name = f'_paperbot_{datetime.now().strftime("%d%m%y")}.log'
+logfile_path = os.path.join(LOG_DIR, logfile_name)
+fh = logging.FileHandler(logfile_path)
 fh.setLevel(logging.DEBUG)
 fh.setFormatter(formatter)
 log.addHandler(fh)
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 log.info(f"ROOT_DIR: {ROOT_DIR}")
-KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 log.info(f"KEYS_DIR: {KEYS_DIR}")
-DATA_DIR = os.path.join(ROOT_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
 log.info(f"DATA_DIR: {DATA_DIR}")
-
-PAPER_SOURCES: str = """
-[Twitter](https://twitter.com/i/lists/1653485531546767361)
-[PapersWithCode](https://paperswithcode.com/)
-[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
-[ArxivSanity](http://www.arxiv-sanity.com/)
-[LabML](https://papers.labml.ai/papers/weekly/)
-"""
+log.info(f"LOG_DIR: {LOG_DIR}")
 
 def set_openai_key(key=None):
     if key is None:
@@ -190,6 +188,14 @@ class PaperBot(discord.Client):
     TEST = 1110662456323342417
     PROD = 1107745177264726036
     
+    # Paper sources
+    SOURCES = """
+[Twitter](https://twitter.com/i/lists/1653485531546767361)
+[PapersWithCode](https://paperswithcode.com/)
+[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
+[ArxivSanity](http://www.arxiv-sanity.com/)
+[LabML](https://papers.labml.ai/papers/weekly/)
+"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -197,6 +203,7 @@ class PaperBot(discord.Client):
         self.channel_id = self.TEST
         self.actions = {
             "add_paper": self.add_paper,
+            "paper_sources": self.paper_sources,
             "chat": self.chat,
             "image": self.capture_image,
         }
@@ -225,7 +232,7 @@ class PaperBot(discord.Client):
                 )
             behavior = self.actions.get(behavior, None)
             if behavior is not None:
-                log.debug(f"Running behavior: {behavior}")
+                log.info(f"Running behavior: {behavior}")
                 await self.actions[behavior](msg)
 
     async def add_paper(self, msg: discord.Message):
@@ -239,6 +246,9 @@ class PaperBot(discord.Client):
                 continue
             blurb = paper_blurb(paper)
             await self.get_channel(self.channel_id).send(blurb)
+
+    async def paper_sources(self, msg: discord.Message):
+        await self.get_channel(self.channel_id).send(self.SOURCES)
 
     async def chat(self, msg: discord.Message):
         pass
