@@ -7,7 +7,10 @@ from typing import Dict, Iterator, List, Union
 import arxiv
 import discord
 import openai
+
 # import google.generativeai as palm
+
+EMOJI = "🗃️"
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -18,7 +21,7 @@ LOG_DIR = os.path.join(ROOT_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
-formatter = logging.Formatter("🗃️|%(asctime)s|%(message)s")
+formatter = logging.Formatter(f"{EMOJI}" + "|%(asctime)s|%(message)s")
 # Set up console handler
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
@@ -36,6 +39,7 @@ log.info(f"ROOT_DIR: {ROOT_DIR}")
 log.info(f"KEYS_DIR: {KEYS_DIR}")
 log.info(f"DATA_DIR: {DATA_DIR}")
 log.info(f"LOG_DIR: {LOG_DIR}")
+
 
 def set_openai_key(key=None):
     if key is None:
@@ -107,6 +111,7 @@ def palm_text(prompt):
 
     return completion.result
 
+
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
@@ -114,21 +119,6 @@ def find_papers(msg: str) -> Iterator[arxiv.Result]:
         search = arxiv.Search(id_list=[arxiv_id])
         for paper in search.results():
             yield paper
-
-
-def paper_blurb(paper: arxiv.Result) -> str:
-    title = paper.title
-    authors: List[str] = [author.name for author in paper.authors]
-    published = paper.published.strftime("%m/%d/%Y")
-    url = paper.pdf_url
-    blurb = f"""\n
------ 📝 ArXiV -----
-[{title}]({url})
-{published}
-{", ".join(authors)}
---------------------
-"""
-    return blurb
 
 
 def gpt_text(
@@ -162,6 +152,10 @@ class FakeDB(object):
 
     def add_paper(self, paper: arxiv.Result):
         self.papers[paper.get_short_id()] = paper
+        # title = paper.title
+        # authors: List[str] = [author.name for author in paper.authors]
+        # published = paper.published.strftime("%m/%d/%Y")
+        # url = paper.pdf_url
 
     def get_papers(self, id: str):
         return self.papers.get(id, None)
@@ -187,7 +181,7 @@ class PaperBot(discord.Client):
     # Channel IDs
     TEST = 1110662456323342417
     PROD = 1107745177264726036
-    
+
     # Paper sources
     SOURCES = """
 [Twitter](https://twitter.com/i/lists/1653485531546767361)
@@ -207,11 +201,11 @@ class PaperBot(discord.Client):
             "chat": self.chat,
             "image": self.capture_image,
         }
+        self.action_list = list(self.actions.keys())
 
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
-        await self.get_channel(self.channel_id).send("🗃️paperbot is here!")
-
+        await self.get_channel(self.channel_id).send(f"{EMOJI} has entered the chat!")
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
@@ -220,16 +214,16 @@ class PaperBot(discord.Client):
         if self.user.id in [m.id for m in msg.mentions]:
             log.debug(f"Mentioned in message by {msg.author.name}")
             behavior = gpt_text(
-                    prompt=f"{msg.content}",
-                    system=" ".join(
-                        [
-                            "You are paperbot."
-                            "Determine which behavior the user wants to run.",
-                            "Do not explain, Return the name of the behavior only.",
-                            f"The available behaviors are {', '.join(self.actions.keys())}",
-                        ]
-                    ),
-                )
+                prompt=f"{msg.content}",
+                system=" ".join(
+                    [
+                        "You are paperbot."
+                        "Determine which behavior the user wants to run.",
+                        "Do not explain, Return the name of the behavior only.",
+                        f"The available behaviors are {', '.join(self.action_list)}",
+                    ]
+                ),
+            )
             behavior = self.actions.get(behavior, None)
             if behavior is not None:
                 log.info(f"Running behavior: {behavior}")
@@ -239,13 +233,16 @@ class PaperBot(discord.Client):
         for paper in find_papers(msg.content):
             log.info(f"Found paper: {paper.title}")
             id = paper.get_short_id()
-            if self.db.get_papers(id) is None:
-                self.db.add_paper(paper)
+            paper = self.db.get_papers(id)
+            if paper is None:
+                paper = self.db.add_paper(paper)
+                _msg = f"Adding paper {id}"
+                log.info(_msg)
+                await self.get_channel(self.channel_id).send(_msg)
             else:
-                log.info(f"Paper {id} already in DB, skipping.")
-                continue
-            blurb = paper_blurb(paper)
-            await self.get_channel(self.channel_id).send(blurb)
+                _msg = f"The paper {id} was already posted"
+                log.info(_msg)
+                await self.get_channel(self.channel_id).send(_msg)
 
     async def paper_sources(self, msg: discord.Message):
         await self.get_channel(self.channel_id).send(self.SOURCES)
@@ -255,6 +252,7 @@ class PaperBot(discord.Client):
 
     async def capture_image(self, ctx):
         pass
+
 
 if __name__ == "__main__":
     set_discord_key()
