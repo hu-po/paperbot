@@ -6,8 +6,8 @@ from typing import Dict, Iterator, List, Union
 
 import arxiv
 import discord
-# import google.generativeai as palm
 import openai
+# import google.generativeai as palm
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
@@ -150,12 +150,6 @@ def paper_blurb(paper: arxiv.Result) -> str:
 """
     return blurb
 
-
-def gpt_chat(context, prompt, examples=None):
-    # TODO: examples converts tuples into gpt dict format
-    return gpt_text(prompt, system=context)
-
-
 def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
     system=None,
@@ -209,20 +203,36 @@ class PaperBot(discord.Client):
     - post current paper queue to channel (every X amount of time?)
     """
 
+    # Channel IDs
+    TEST = 1110662456323342417
+    PROD = 1107745177264726036
+    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = FakeDB()
-        self.channel_id = int(os.environ.get("DISCORD_CHANNEL_ID"))
+        self.channel_id = self.TEST
+        self.actions = {
+            "add_paper": self.add_paper,
+            "chat": self.chat,
+            "wiggle": self.wiggle,
+            "image": self.capture_image,
+        }
+
 
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
         await self.get_channel(self.channel_id).send("🗃️paperbot is here!")
 
-    async def on_message(self, msg):
-        # we do not want the bot to reply to itself
+
+    async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
             return
         log.debug(f"Received message: {msg.content}")
+        
+
+
+    async def add_paper(self, msg: discord.Message):
         for paper in find_papers(msg.content):
             log.info(f"Found paper: {paper.title}")
             id = paper.get_short_id()
@@ -234,6 +244,14 @@ class PaperBot(discord.Client):
             blurb = paper_blurb(paper)
             await self.get_channel(self.channel_id).send(blurb)
 
+    async def chat(self, msg: discord.Message):
+        pass
+
+    async def wiggle(self, msg: discord.Message):
+        pass
+
+    async def capture_image(self, ctx):
+        pass
 
 if __name__ == "__main__":
     set_discord_key()
@@ -243,5 +261,5 @@ if __name__ == "__main__":
 
     intents = discord.Intents.default()
     intents.message_content = True
-    client = PaperBot(intents=intents)
-    client.run(os.environ["DISCORD_BOT_TOKEN"])
+    bot = PaperBot(intents=intents)
+    bot.run(os.environ["DISCORD_BOT_TOKEN"])
