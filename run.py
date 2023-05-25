@@ -109,24 +109,6 @@ def palm_text(prompt):
 
     return completion.result
 
-
-def palm_chat(prompt, context, examples=None):
-    """https://developers.generativeai.google/tutorials/chat_quickstart"""
-    # # An array of "ideal" interactions between the user and the model
-    # examples = [
-    #     ("What's up?", # A hypothetical user input
-    #     "What isn't up?? The sun rose another day, the world is bright, anything is possible! ☀️" # A hypothetical model response
-    #     ),
-    #     ("I'm kind of bored",z
-    #     "How can you be bored when there are so many fun, exciting, beautiful experiences to be had in the world? 🌈")
-    # ]
-    response = palm.chat(
-        context=context,
-        examples=examples,
-        messages=prompt,
-    )
-    return response.last
-
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
@@ -149,6 +131,7 @@ def paper_blurb(paper: arxiv.Result) -> str:
 --------------------
 """
     return blurb
+
 
 def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
@@ -215,10 +198,8 @@ class PaperBot(discord.Client):
         self.actions = {
             "add_paper": self.add_paper,
             "chat": self.chat,
-            "wiggle": self.wiggle,
             "image": self.capture_image,
         }
-
 
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
@@ -229,8 +210,23 @@ class PaperBot(discord.Client):
         if msg.author.id == self.user.id:
             return
         log.debug(f"Received message: {msg.content}")
-        
-
+        if self.user.id in [m.id for m in msg.mentions]:
+            log.debug(f"Mentioned in message by {msg.author.name}")
+            behavior = gpt_text(
+                    prompt=f"{msg.content}",
+                    system=" ".join(
+                        [
+                            "You are paperbot."
+                            "Determine which behavior the user wants to run.",
+                            "Do not explain, Return the name of the behavior only.",
+                            f"The available behaviors are {', '.join(self.actions.keys())}",
+                        ]
+                    ),
+                )
+            behavior = self.actions.get(behavior, None)
+            if behavior is not None:
+                log.debug(f"Running behavior: {behavior}")
+                await self.actions[behavior](msg)
 
     async def add_paper(self, msg: discord.Message):
         for paper in find_papers(msg.content):
@@ -245,9 +241,6 @@ class PaperBot(discord.Client):
             await self.get_channel(self.channel_id).send(blurb)
 
     async def chat(self, msg: discord.Message):
-        pass
-
-    async def wiggle(self, msg: discord.Message):
         pass
 
     async def capture_image(self, ctx):
