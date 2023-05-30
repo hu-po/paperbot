@@ -2,15 +2,14 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Dict, Iterator, List, Union
+from typing import Callable, Dict, Iterator, List, Union
 
 import arxiv
 import discord
-import openai
 import google.generativeai as palm
+import openai
 
 EMOJI = "🗃️"
-
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 DATA_DIR = os.path.join(ROOT_DIR, "data")
@@ -178,8 +177,10 @@ class PaperBot(discord.Client):
     """
 
     # Channel IDs
-    TEST = 1110662456323342417
-    PROD = 1107745177264726036
+    CHANNELS: Dict[str, int] = {
+        "papers": 1107745177264726036,
+        "bot-debug": 1110662456323342417,
+    }
 
     # Paper sources
     SOURCES = """
@@ -190,17 +191,19 @@ class PaperBot(discord.Client):
 [LabML](https://papers.labml.ai/papers/weekly/)
 """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, channel_name: str = 'bot-debug', **kwargs):
         super().__init__(*args, **kwargs)
         self.db = FakeDB()
-        self.channel_id = self.TEST
-        self.actions = {
+        if self.CHANNELS.get(channel_name, None) is None:
+            raise ValueError(f"Channel {channel_name} not found.")
+        self.channel_id: int = self.CHANNELS[channel_name]
+        self.actions: Dict[str, Callable] = {
             "add_paper": self.add_paper,
             "paper_sources": self.paper_sources,
             "chat": self.chat,
             "image": self.capture_image,
         }
-        self.action_list = list(self.actions.keys())
+        self.action_list: List[str] = list(self.actions.keys())
 
     async def on_ready(self):
         log.info(f"We have logged in as {self.user}")
