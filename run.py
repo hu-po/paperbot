@@ -7,8 +7,7 @@ from typing import Dict, Iterator, List, Union
 import arxiv
 import discord
 import openai
-
-# import google.generativeai as palm
+import google.generativeai as palm
 
 EMOJI = "🗃️"
 
