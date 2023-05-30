@@ -3,3 +3,4 @@ arxiv
 openai
 transformers
 google-generativeai
+polars

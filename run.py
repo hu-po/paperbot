@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime
 from typing import Callable, Dict, Iterator, List, Union
+import polars as pd
 
 import arxiv
 import discord
@@ -144,19 +145,35 @@ def gpt_text(
     return response["choices"][0]["message"]["content"]
 
 
-class FakeDB(object):
-    def __init__(self):
-        self.papers = {}
+class LocalDB(object):
+
+    COLUMNS = ["title", "url", "authors", "published"]
+
+    def __init__(self,
+                 filepath: str = None,
+        ):
+        if filepath is None:
+            log.info("No filepath provided for local DB.")
+            filepath = os.path.join(DATA_DIR, "papers.csv")
+        if os.path.exists(filepath):
+            log.info(f"Loading local DB from {filepath}")
+            self.df = pd.read_csv(filepath)
+        else:
+            self.df = pd.DataFrame(columns=self.COLUMNS)
 
     def add_paper(self, paper: arxiv.Result):
-        self.papers[paper.get_short_id()] = paper
-        # title = paper.title
-        # authors: List[str] = [author.name for author in paper.authors]
-        # published = paper.published.strftime("%m/%d/%Y")
-        # url = paper.pdf_url
+        self.df = self.df.append(
+            {
+                "title": paper.title,
+                "url": paper.pdf_url,
+                "authors": [author.name for author in paper.authors],
+                "published": paper.published.strftime("%m/%d/%Y"),
+            },
+            ignore_index=True,
+        )
 
     def get_papers(self, id: str):
-        return self.papers.get(id, None)
+        return self.df[self.df["id"] == id]
 
 
 class PaperBot(discord.Client):
@@ -164,16 +181,11 @@ class PaperBot(discord.Client):
     https://github.com/Rapptz/discord.py/tree/master/examples
 
 
-    on message
-    - check for arxiv link
-    - if link, get paper blurb
-    - send paper blurb
-    - start post task
+    actions:
+    - check message for arxiv link, add to db
+    - manage a priority queue, queue based on votes?
+    - suggest sources for finding papers (auto suggest papers?)
 
-    post task:
-    - add paper to priority queue, priority based on votes?
-    - add paper to static db (txt file? notion? google big table? google sheets?)
-    - post current paper queue to channel (every X amount of time?)
     """
 
     # Channel IDs
@@ -191,9 +203,9 @@ class PaperBot(discord.Client):
 [LabML](https://papers.labml.ai/papers/weekly/)
 """
 
-    def __init__(self, *args, channel_name: str = 'bot-debug', **kwargs):
+    def __init__(self, *args, channel_name: str = "bot-debug", **kwargs):
         super().__init__(*args, **kwargs)
-        self.db = FakeDB()
+        self.db = LocalDB()
         if self.CHANNELS.get(channel_name, None) is None:
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
