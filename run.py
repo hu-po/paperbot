@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Callable, Dict, Iterator, List, Union
+from typing import Any, Callable, Dict, Iterator, List, Union
 import polars as pd
 from polars.exceptions import NoRowsReturnedError
 
@@ -11,15 +11,15 @@ import discord
 import google.generativeai as palm
 import openai
 
-EMOJI = "🗃️"
-IAM = "You are paperbot. You know about ML, AI, CS. You are good at explaining and suggesting literature."
-SOURCES = """
-[Twitter](https://twitter.com/i/lists/1653485531546767361)
-[PapersWithCode](https://paperswithcode.com/)
-[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
-[ArxivSanity](http://www.arxiv-sanity.com/)
-[LabML](https://papers.labml.ai/papers/weekly/)
-"""
+EMOJI: str = "🗃️"
+IAM: str = "You are paperbot. You know about ML, AI, CS. You are good at explaining and suggesting literature."
+SOURCES: Dict[str, str] = {
+    "Twitter" : "https://twitter.com/i/lists/1653485531546767361",
+    "PapersWithCode" : "https://paperswithcode.com/",
+    "Reddit" : "https://www.reddit.com/user/deephugs/m/ml/",
+    "ArxivSanity" : "http://www.arxiv-sanity.com/",
+    "LabML" : "https://papers.labml.ai/papers/weekly/",
+}
 
 MAX_TOKENS = 64
 TEMPERATURE = 0
@@ -179,9 +179,10 @@ class LocalDB(object):
             filepath = os.path.join(DATA_DIR, "papers.csv")
         self.filepath = filepath
         if os.path.exists(filepath):
-            log.info(f"Loading local DB from {self.filepath}")
+            log.info(f"Loading existing local DB from {self.filepath}")
             self.df = pd.read_csv(self.filepath)
         else:
+            log.info(f"Creating new local DB at {self.filepath}")
             self.df = pd.DataFrame(schema=self.SCHEMA)
 
     def add_paper(self, paper: arxiv.Result):
@@ -208,8 +209,8 @@ class LocalDB(object):
         self.df = self.df.vstack(_df)
         self.save()
 
-    def list_papers(self):
-        return str(self.df)
+    def list_papers(self) -> Dict[str, Any]:
+        yield from self.df.iter_rows(named=True)
     
     def save(self):
         log.info(f"Saving local DB to {self.filepath}")
@@ -249,14 +250,30 @@ async def list_papers(
     channel: discord.TextChannel,
     db: LocalDB,
 ) -> None:
-    await channel.send(db.list_papers())
+    embeds = []
+    for paper_dict in db.list_papers():
+        embeds.append(discord.Embed(
+            title=paper_dict["title"],
+            url=paper_dict["url"],
+            description=paper_dict["tags"],
+        ))
+    log.info("Listing the papers.")
+    await channel.send(embeds=embeds)
+
 
 async def list_sources(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
 ) -> None:
-    await channel.send(SOURCES)
+    embeds = []
+    for label, url in SOURCES.items():
+        embeds.append(discord.Embed(
+            title=label,
+            url=url,
+        ))
+    log.info("Listing the sources.")
+    await channel.send(content='Here are some sources for papers:', embeds=embeds)
 
 
 async def gpt_chat(
