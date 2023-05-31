@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from typing import Callable, Dict, Iterator, List, Union
 import polars as pd
+from polars.exceptions import NoRowsReturnedError
 
 import arxiv
 import discord
@@ -11,6 +12,18 @@ import google.generativeai as palm
 import openai
 
 EMOJI = "🗃️"
+IAM = "You are paperbot. You know about ML, AI, CS. You are good at explaining and suggesting literature."
+SOURCES = """
+[Twitter](https://twitter.com/i/lists/1653485531546767361)
+[PapersWithCode](https://paperswithcode.com/)
+[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
+[ArxivSanity](http://www.arxiv-sanity.com/)
+[LabML](https://papers.labml.ai/papers/weekly/)
+"""
+
+MAX_TOKENS = 64
+TEMPERATURE = 0
+
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 DATA_DIR = os.path.join(ROOT_DIR, "data")
@@ -105,7 +118,8 @@ def palm_text(prompt):
         model=model,
         prompt=prompt,
         # The maximum length of the response
-        max_output_tokens=800,
+        max_output_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE,
     )
 
     return completion.result
@@ -124,8 +138,8 @@ def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
     system=None,
     model="gpt-3.5-turbo",
-    temperature: float = 0.6,
-    max_tokens: int = 32,
+    temperature: float = TEMPERATURE,
+    max_tokens: int = MAX_TOKENS,
     stop: List[str] = ["\n"],
 ):
     if isinstance(prompt, str):
@@ -146,34 +160,139 @@ def gpt_text(
 
 
 class LocalDB(object):
+    SCHEMA: Dict[str, pd.DataType] = {
+        "id": pd.Utf8,
+        "title": pd.Utf8,
+        "url": pd.Utf8,
+        "authors": pd.Utf8,
+        "published": pd.Utf8,
+        "abstract": pd.Utf8,
+        "tags": pd.Utf8,
+    }
 
-    COLUMNS = ["title", "url", "authors", "published"]
-
-    def __init__(self,
-                 filepath: str = None,
-        ):
+    def __init__(
+        self,
+        filepath: str = None,
+    ):
         if filepath is None:
             log.info("No filepath provided for local DB.")
             filepath = os.path.join(DATA_DIR, "papers.csv")
+        self.filepath = filepath
         if os.path.exists(filepath):
-            log.info(f"Loading local DB from {filepath}")
-            self.df = pd.read_csv(filepath)
+            log.info(f"Loading local DB from {self.filepath}")
+            self.df = pd.read_csv(self.filepath)
         else:
-            self.df = pd.DataFrame(columns=self.COLUMNS)
+            self.df = pd.DataFrame(schema=self.SCHEMA)
 
     def add_paper(self, paper: arxiv.Result):
-        self.df = self.df.append(
-            {
+        tags: str = gpt_text(
+        prompt=f"{paper.summary}",
+        system=" ".join(
+            [
+                "You are paperbot.",
+                "Create a comma separated list of tags for this paper.",
+                "Do not explain, only provide the string tags.",
+                "Here is the abstract for the paper:",
+            ]
+        ),
+        )
+        _df = pd.DataFrame({
+                "id": paper.get_short_id(),
                 "title": paper.title,
                 "url": paper.pdf_url,
-                "authors": [author.name for author in paper.authors],
+                "authors": ",".join([author.name for author in paper.authors]),
                 "published": paper.published.strftime("%m/%d/%Y"),
-            },
-            ignore_index=True,
-        )
+                "abstract": paper.summary,
+                "tags": tags,
+            })
+        self.df = self.df.vstack(_df)
+        self.save()
+
+    def list_papers(self):
+        return str(self.df)
+    
+    def save(self):
+        log.info(f"Saving local DB to {self.filepath}")
+        self.df.write_csv(self.filepath)
 
     def get_papers(self, id: str):
-        return self.df[self.df["id"] == id]
+        if len(self.df) == 0:
+            return None
+        try:
+            match = self.df.row(by_predicate=(pd.col("id") == id))
+        except NoRowsReturnedError:
+            return None
+        return {column : value for column, value in zip(self.df.columns, match)}
+
+
+async def add_paper(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    for paper in find_papers(msg.content):
+        log.info(f"Found paper: {paper.title}")
+        id = paper.get_short_id()
+        _paper = db.get_papers(id)
+        if _paper is None:
+            db.add_paper(paper)
+            _msg = f"Adding paper {id}"
+            log.info(_msg)
+            await channel.send(_msg)
+        else:
+            _msg = f"The paper {id} was already posted"
+            log.info(_msg)
+            await channel.send(_msg)
+
+async def list_papers(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    await channel.send(db.list_papers())
+
+async def list_sources(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    await channel.send(SOURCES)
+
+
+async def gpt_chat(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    response = gpt_text(
+        prompt=f"{msg.content}",
+        system=" ".join(
+            [
+                IAM,
+                "Respond to the user's message.",
+            ]
+        ),
+    )
+    await channel.send(response)
+
+
+async def palm_chat(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    system = " ".join(
+        [
+            IAM,
+            "Respond to the user's message. This is the user's message:",
+        ]
+    )
+    response = palm_text(prompt=f"{system} {msg.content}")
+    await channel.send(response)
+
+
+async def capture_image(self, ctx):
+    pass
 
 
 class PaperBot(discord.Client):
@@ -194,15 +313,6 @@ class PaperBot(discord.Client):
         "bot-debug": 1110662456323342417,
     }
 
-    # Paper sources
-    SOURCES = """
-[Twitter](https://twitter.com/i/lists/1653485531546767361)
-[PapersWithCode](https://paperswithcode.com/)
-[Reddit](https://www.reddit.com/user/deephugs/m/ml/)
-[ArxivSanity](http://www.arxiv-sanity.com/)
-[LabML](https://papers.labml.ai/papers/weekly/)
-"""
-
     def __init__(self, *args, channel_name: str = "bot-debug", **kwargs):
         super().__init__(*args, **kwargs)
         self.db = LocalDB()
@@ -210,10 +320,13 @@ class PaperBot(discord.Client):
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
         self.actions: Dict[str, Callable] = {
-            "add_paper": self.add_paper,
-            "paper_sources": self.paper_sources,
-            "chat": self.chat,
-            "image": self.capture_image,
+            "add_paper": add_paper,
+            "list_papers": list_papers,
+            "list_sources": list_sources,
+            "chat": gpt_chat,
+            "gpt_chat": gpt_chat,
+            "palm_chat": palm_chat,
+            "image": capture_image,
         }
         self.action_list: List[str] = list(self.actions.keys())
 
@@ -227,7 +340,7 @@ class PaperBot(discord.Client):
         log.debug(f"Received message: {msg.content}")
         if self.user.id in [m.id for m in msg.mentions]:
             log.debug(f"Mentioned in message by {msg.author.name}")
-            behavior = gpt_text(
+            behavior_name: str = gpt_text(
                 prompt=f"{msg.content}",
                 system=" ".join(
                     [
@@ -238,34 +351,14 @@ class PaperBot(discord.Client):
                     ]
                 ),
             )
-            behavior = self.actions.get(behavior, None)
+            behavior = self.actions.get(behavior_name, None)
             if behavior is not None:
-                log.info(f"Running behavior: {behavior}")
-                await self.actions[behavior](msg)
-
-    async def add_paper(self, msg: discord.Message):
-        for paper in find_papers(msg.content):
-            log.info(f"Found paper: {paper.title}")
-            id = paper.get_short_id()
-            paper = self.db.get_papers(id)
-            if paper is None:
-                paper = self.db.add_paper(paper)
-                _msg = f"Adding paper {id}"
-                log.info(_msg)
-                await self.get_channel(self.channel_id).send(_msg)
-            else:
-                _msg = f"The paper {id} was already posted"
-                log.info(_msg)
-                await self.get_channel(self.channel_id).send(_msg)
-
-    async def paper_sources(self, msg: discord.Message):
-        await self.get_channel(self.channel_id).send(self.SOURCES)
-
-    async def chat(self, msg: discord.Message):
-        pass
-
-    async def capture_image(self, ctx):
-        pass
+                log.info(f"Running behavior: {behavior_name}")
+                await behavior(
+                    msg,
+                    self.get_channel(self.channel_id),
+                    self.db,
+                )
 
 
 if __name__ == "__main__":
