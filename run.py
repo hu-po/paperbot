@@ -14,11 +14,11 @@ import openai
 EMOJI: str = "🗃️"
 IAM: str = "You are paperbot. You know about ML, AI, CS. You are good at explaining and suggesting literature."
 SOURCES: Dict[str, str] = {
-    "Twitter" : "https://twitter.com/i/lists/1653485531546767361",
-    "PapersWithCode" : "https://paperswithcode.com/",
-    "Reddit" : "https://www.reddit.com/user/deephugs/m/ml/",
-    "ArxivSanity" : "http://www.arxiv-sanity.com/",
-    "LabML" : "https://papers.labml.ai/papers/weekly/",
+    "Twitter": "https://twitter.com/i/lists/1653485531546767361",
+    "PapersWithCode": "https://paperswithcode.com/",
+    "Reddit": "https://www.reddit.com/user/deephugs/m/ml/",
+    "ArxivSanity": "http://www.arxiv-sanity.com/",
+    "LabML": "https://papers.labml.ai/papers/weekly/",
 }
 
 MAX_TOKENS = 64
@@ -129,8 +129,7 @@ def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
     for arxiv_id in matches:
-        search = arxiv.Search(id_list=[arxiv_id])
-        for paper in search.results():
+        for paper in arxiv.Search(id_list=[arxiv_id]).results():
             yield paper
 
 
@@ -168,6 +167,7 @@ class LocalDB(object):
         "published": pd.Utf8,
         "abstract": pd.Utf8,
         "tags": pd.Utf8,
+        "suggester": pd.Utf8,
     }
 
     def __init__(
@@ -187,17 +187,18 @@ class LocalDB(object):
 
     def add_paper(self, paper: arxiv.Result):
         tags: str = gpt_text(
-        prompt=f"{paper.summary}",
-        system=" ".join(
-            [
-                "You are paperbot.",
-                "Create a comma separated list of tags for this paper.",
-                "Do not explain, only provide the string tags.",
-                "Here is the abstract for the paper:",
-            ]
-        ),
+            prompt=f"{paper.summary}",
+            system=" ".join(
+                [
+                    "You are paperbot.",
+                    "Create a comma separated list of tags for this paper.",
+                    "Do not explain, only provide the string tags.",
+                    "Here is the abstract for the paper:",
+                ]
+            ),
         )
-        _df = pd.DataFrame({
+        _df = pd.DataFrame(
+            {
                 "id": paper.get_short_id(),
                 "title": paper.title,
                 "url": paper.pdf_url,
@@ -205,13 +206,14 @@ class LocalDB(object):
                 "published": paper.published.strftime("%m/%d/%Y"),
                 "abstract": paper.summary,
                 "tags": tags,
-            })
+            }
+        )
         self.df = self.df.vstack(_df)
         self.save()
 
     def list_papers(self) -> Dict[str, Any]:
         yield from self.df.iter_rows(named=True)
-    
+
     def save(self):
         log.info(f"Saving local DB to {self.filepath}")
         self.df.write_csv(self.filepath)
@@ -223,7 +225,7 @@ class LocalDB(object):
             match = self.df.row(by_predicate=(pd.col("id") == id))
         except NoRowsReturnedError:
             return None
-        return {column : value for column, value in zip(self.df.columns, match)}
+        return {column: value for column, value in zip(self.df.columns, match)}
 
 
 async def add_paper(
@@ -245,6 +247,7 @@ async def add_paper(
             log.info(_msg)
             await channel.send(_msg)
 
+
 async def list_papers(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -252,11 +255,13 @@ async def list_papers(
 ) -> None:
     embeds = []
     for paper_dict in db.list_papers():
-        embeds.append(discord.Embed(
-            title=paper_dict["title"],
-            url=paper_dict["url"],
-            description=paper_dict["tags"],
-        ))
+        embeds.append(
+            discord.Embed(
+                title=paper_dict["title"],
+                url=paper_dict["url"],
+                description=paper_dict["tags"],
+            )
+        )
     log.info("Listing the papers.")
     await channel.send(embeds=embeds)
 
@@ -268,12 +273,44 @@ async def list_sources(
 ) -> None:
     embeds = []
     for label, url in SOURCES.items():
-        embeds.append(discord.Embed(
-            title=label,
-            url=url,
-        ))
+        embeds.append(
+            discord.Embed(
+                title=label,
+                url=url,
+            )
+        )
     log.info("Listing the sources.")
-    await channel.send(content='Here are some sources for papers:', embeds=embeds)
+    await channel.send(content="Here are some sources for papers:", embeds=embeds)
+
+
+async def list_author(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+) -> None:
+    formatted_name = gpt_text(
+        prompt=f"{msg.content}",
+        system=" ".join(
+            [
+                "You are paperbot.",
+                "You extract and format the author name in a message.",
+                "Do not explain, only return one name in the format First,Last.",
+                "Example message: 'I am interested in the work of John Smith.'",
+                "Example response: 'John,Smith'",
+            ]
+        ),
+    )
+    embeds = []
+    for result in arxiv.Search(query=f"au:{formatted_name}").results():
+        embeds.append(
+            discord.Embed(
+                title=result.title,
+                url=result.pdf_url,
+            )
+        )
+    await channel.send(
+        content=f"Here are the other papers by author: {formatted_name}:", embeds=embeds[:10]
+    )
 
 
 async def gpt_chat(
@@ -340,6 +377,7 @@ class PaperBot(discord.Client):
             "add_paper": add_paper,
             "list_papers": list_papers,
             "list_sources": list_sources,
+            "list_author": list_author,
             "chat": gpt_chat,
             "gpt_chat": gpt_chat,
             "palm_chat": palm_chat,
