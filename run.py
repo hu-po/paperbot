@@ -158,6 +158,21 @@ def gpt_text(
     return response["choices"][0]["message"]["content"]
 
 
+def summarize_paper(paper: arxiv.Result) -> str:
+    summary: str = gpt_text(
+        prompt=f"{paper.summary}",
+        system=" ".join(
+            [
+                "You are paperbot.",
+                "Summarize this abstract in 1 sentence.",
+                "Do not explain, only provide the 1 sentence summary.",
+                "Here is the abstract for the paper:",
+            ]
+        ),
+    )
+    return summary
+
+
 class LocalDB(object):
     SCHEMA: Dict[str, pd.DataType] = {
         "id": pd.Utf8,
@@ -196,6 +211,7 @@ class LocalDB(object):
                     "Here is the abstract for the paper:",
                 ]
             ),
+            model="gpt-4",
         )
         _df = pd.DataFrame(
             {
@@ -301,15 +317,20 @@ async def list_author(
         ),
     )
     embeds = []
-    for result in arxiv.Search(query=f"au:{formatted_name}").results():
+    max_papers_per_author = 3
+    for i, result in enumerate(arxiv.Search(query=f"au:{formatted_name}").results()):
+        if i >= max_papers_per_author:
+            break
         embeds.append(
             discord.Embed(
                 title=result.title,
                 url=result.pdf_url,
+                description=summarize_paper(result),
             )
         )
     await channel.send(
-        content=f"Here are the other papers by author: {formatted_name}:", embeds=embeds[:10]
+        content=f"Here are the other papers by author: {formatted_name}:",
+        embeds=embeds[:10],
     )
 
 
