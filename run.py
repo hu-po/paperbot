@@ -1,23 +1,25 @@
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Union
-import polars as pd
-from polars.exceptions import NoRowsReturnedError
-from dataclasses import dataclass
 
 import arxiv
 import discord
 import google.generativeai as palm
 import openai
+import polars as pd
+from polars.exceptions import NoRowsReturnedError
 
 NAME: str = "paperbot"
 EMOJI: str = "🗃️"
-IAM: str = ''.join([
-    f"You are {NAME}, a helpful bot.",
-    "You help people organize arxiv papers.",
-])
+IAM: str = "".join(
+    [
+        f"You are {NAME}, a helpful bot.",
+        "You help people organize arxiv papers.",
+    ]
+)
 SOURCES: Dict[str, str] = {
     "Twitter": "https://twitter.com/i/lists/1653485531546767361",
     "PapersWithCode": "https://paperswithcode.com/",
@@ -370,43 +372,38 @@ async def palm_chat(
     response = palm_text(prompt=f"{system} {msg.content}")
     await channel.send(response)
 
+
 @dataclass
 class Behavior:
     name: str
     func: Callable
     description: str
 
+
 class PaperBot(discord.Client):
-    """
-    https://github.com/Rapptz/discord.py/tree/master/examples
-
-
-    actions:
-    - check message for arxiv link, add to db
-    - manage a priority queue, queue based on votes?
-    - suggest sources for finding papers (auto suggest papers?)
-
-    """
-
     # Channel IDs
     CHANNELS: Dict[str, int] = {
         "papers": 1107745177264726036,
         "bot-debug": 1110662456323342417,
     }
 
-    def __init__(self, *args,
-                 channel_name: str = "bot-debug",
-                 max_response_tokens: int = 32,
-                 default_llm: str = 'gpt3.5',
-                 **kwargs):
+    def __init__(
+        self,
+        *args,
+        channel_name: str = "bot-debug",
+        max_response_tokens: int = 32,
+        default_llm: str = "gpt3.5-turbo",
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.db = LocalDB()
         if self.CHANNELS.get(channel_name, None) is None:
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
         self.max_response_tokens: int = max_response_tokens
-        self.behavior_dict: Dict[str, Behavior] = {}
-        self.behavior_list: List[str] = []
+        self.default_llm: str = default_llm
+        assert self.default_llm in ["gpt3.5-turbo", "gpt4", "palm"]
+        self.behaviors: Dict[str, Behavior] = {}
         # Populate list of action
         for action in [
             Behavior("add_paper", add_paper, "Add a paper to the database."),
@@ -415,8 +412,7 @@ class PaperBot(discord.Client):
             Behavior("list_author", list_author, "List all papers by an author."),
             Behavior("chat", gpt_chat, "Chat with the bot."),
         ]:
-            self.behavior_dict[action.name] = action
-            self.behavior_list.append(action.name)
+            self.behaviors[action.name] = action
 
     async def on_ready(self):
         _msg = f"{EMOJI}{NAME} has entered the chat!"
@@ -429,19 +425,19 @@ class PaperBot(discord.Client):
         log.debug(f"Received message: {msg.content}")
         if self.user.id in [m.id for m in msg.mentions]:
             log.debug(f"Mentioned in message by {msg.author.name}")
-            _system_prompt: List[str] =  [
+            _system_prompt: List[str] = [
                 IAM,
                 "Determine which behavior the user wants to run.",
                 "Do not explain, Return the name of the behavior only.",
                 "The available behaviors are:",
             ]
-            for action in self.behavior_dict.values():
+            for action in self.behaviors.values():
                 _system_prompt.append(f"{action.name}: {action.description}")
             behavior_guess: str = gpt_text(
                 prompt=f"{msg.content}",
-                system=''.join(_system_prompt),
+                system="".join(_system_prompt),
             )
-            behavior = self.behavior_dict.get(behavior_guess, None)
+            behavior = self.behaviors.get(behavior_guess, None)
             if behavior is not None:
                 _msg = f"Running behavior: {behavior_guess}."
                 log.info(_msg)
