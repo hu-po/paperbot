@@ -5,14 +5,19 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Union
 import polars as pd
 from polars.exceptions import NoRowsReturnedError
+from dataclasses import dataclass
 
 import arxiv
 import discord
 import google.generativeai as palm
 import openai
 
+NAME: str = "paperbot"
 EMOJI: str = "🗃️"
-IAM: str = "You are paperbot. You know about ML, AI, CS. You are good at explaining and suggesting literature."
+IAM: str = ''.join([
+    f"You are {NAME}, a helpful bot.",
+    "You help people organize arxiv papers.",
+])
 SOURCES: Dict[str, str] = {
     "Twitter": "https://twitter.com/i/lists/1653485531546767361",
     "PapersWithCode": "https://paperswithcode.com/",
@@ -365,10 +370,11 @@ async def palm_chat(
     response = palm_text(prompt=f"{system} {msg.content}")
     await channel.send(response)
 
-
-async def capture_image(self, ctx):
-    pass
-
+@dataclass
+class Behavior:
+    name: str
+    func: Callable
+    description: str
 
 class PaperBot(discord.Client):
     """
@@ -388,27 +394,34 @@ class PaperBot(discord.Client):
         "bot-debug": 1110662456323342417,
     }
 
-    def __init__(self, *args, channel_name: str = "bot-debug", **kwargs):
+    def __init__(self, *args,
+                 channel_name: str = "bot-debug",
+                 max_response_tokens: int = 32,
+                 default_llm: str = 'gpt3.5',
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.db = LocalDB()
         if self.CHANNELS.get(channel_name, None) is None:
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
-        self.actions: Dict[str, Callable] = {
-            "add_paper": add_paper,
-            "list_papers": list_papers,
-            "list_sources": list_sources,
-            "list_author": list_author,
-            "chat": gpt_chat,
-            "gpt_chat": gpt_chat,
-            "palm_chat": palm_chat,
-            "image": capture_image,
-        }
-        self.action_list: List[str] = list(self.actions.keys())
+        self.max_response_tokens: int = max_response_tokens
+        self.behavior_dict: Dict[str, Behavior] = {}
+        self.behavior_list: List[str] = []
+        # Populate list of action
+        for action in [
+            Behavior("add_paper", add_paper, "Add a paper to the database."),
+            Behavior("list_papers", list_papers, "List all papers in the database."),
+            Behavior("list_sources", list_sources, "List all sources for papers."),
+            Behavior("list_author", list_author, "List all papers by an author."),
+            Behavior("chat", gpt_chat, "Chat with the bot."),
+        ]:
+            self.behavior_dict[action.name] = action
+            self.behavior_list.append(action.name)
 
     async def on_ready(self):
-        log.info(f"We have logged in as {self.user}")
-        await self.get_channel(self.channel_id).send(f"{EMOJI} has entered the chat!")
+        _msg = f"{EMOJI}{NAME} has entered the chat!"
+        log.info(_msg)
+        await self.get_channel(self.channel_id).send(_msg)
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
@@ -416,25 +429,32 @@ class PaperBot(discord.Client):
         log.debug(f"Received message: {msg.content}")
         if self.user.id in [m.id for m in msg.mentions]:
             log.debug(f"Mentioned in message by {msg.author.name}")
-            behavior_name: str = gpt_text(
+            _system_prompt: List[str] =  [
+                IAM,
+                "Determine which behavior the user wants to run.",
+                "Do not explain, Return the name of the behavior only.",
+                "The available behaviors are:",
+            ]
+            for action in self.behavior_dict.values():
+                _system_prompt.append(f"{action.name}: {action.description}")
+            behavior_guess: str = gpt_text(
                 prompt=f"{msg.content}",
-                system=" ".join(
-                    [
-                        "You are paperbot."
-                        "Determine which behavior the user wants to run.",
-                        "Do not explain, Return the name of the behavior only.",
-                        f"The available behaviors are {', '.join(self.action_list)}",
-                    ]
-                ),
+                system=''.join(_system_prompt),
             )
-            behavior = self.actions.get(behavior_name, None)
+            behavior = self.behavior_dict.get(behavior_guess, None)
             if behavior is not None:
-                log.info(f"Running behavior: {behavior_name}")
+                _msg = f"Running behavior: {behavior_guess}."
+                log.info(_msg)
+                await self.get_channel(self.channel_id).send(_msg)
                 await behavior(
                     msg,
                     self.get_channel(self.channel_id),
                     self.db,
                 )
+            else:
+                _msg = f"Could not find behavior: {behavior_guess}."
+                log.warning(_msg)
+                await self.get_channel(self.channel_id).send(_msg)
 
 
 if __name__ == "__main__":
