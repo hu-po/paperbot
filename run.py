@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Union
 
+import numpy as np
 import arxiv
 import discord
 import google.generativeai as palm
@@ -111,6 +112,7 @@ def set_palm_key(key=None):
     # palm.configure(api_key=key)
     log.info("Palm API key set.")
 
+
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
@@ -133,7 +135,7 @@ def palm_text(
         if "generateText" in m.supported_generation_methods
     ]
     model = models[0].name
-    
+
     if prompt is None:
         prompt = ""
 
@@ -148,6 +150,7 @@ def palm_text(
     )
 
     return completion.result
+
 
 def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
@@ -189,6 +192,17 @@ def summarize_paper(paper: arxiv.Result) -> str:
     return summary
 
 
+def get_embedding(
+    paper: arxiv.Result,
+    model: str = "text-embedding-ada-002",
+) -> np.ndarray:
+    embedding: List[float] = openai.Embedding.create(
+        model=model,
+        input=paper.summary,
+    )
+    return np.array(embedding["data"][0]["embedding"])
+
+
 class LocalDB(object):
     SCHEMA: Dict[str, pd.DataType] = {
         "id": pd.Utf8,
@@ -200,6 +214,7 @@ class LocalDB(object):
         "summary": pd.Utf8,
         "tags": pd.Utf8,
         "user": pd.Utf8,
+        "embedding": pd.Array,
     }
 
     def __init__(
@@ -217,10 +232,11 @@ class LocalDB(object):
             log.info(f"Creating new local DB at {self.filepath}")
             self.df = pd.DataFrame(schema=self.SCHEMA)
 
-    def add_paper(self,
-                  paper: arxiv.Result,
-                  user: str = None,
-                  ):
+    def add_paper(
+        self,
+        paper: arxiv.Result,
+        user: str = None,
+    ):
         _df = pd.DataFrame(
             {
                 "id": paper.get_short_id(),
@@ -232,10 +248,17 @@ class LocalDB(object):
                 "summary": summarize_paper(paper),
                 "tags": ",".join(paper.categories),
                 "user": user or "",
+                "embedding": get_embedding(paper),
             }
         )
         self.df = self.df.vstack(_df)
         self.save()
+
+    def similarity_search(self, paper: arxiv.Result, k: int = 5):
+        embedding: np.ndarray = get_embedding(paper)
+        cosine_sim: np.ndarray = np.dot(embedding, self.df["embedding"].values.T)
+        top_k_idx: np.ndarray = np.argpartition(cosine_sim, -k)[-k:]
+        yield from self.df.iloc[top_k_idx].iter_rows(named=True)
 
     def list_papers(self) -> Dict[str, Any]:
         yield from self.df.iter_rows(named=True)
@@ -273,6 +296,37 @@ async def add_paper(
             _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
+
+
+async def find_paper(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: LocalDB,
+    **kwargs,
+) -> None:
+    for paper in find_papers(msg.content):
+        log.info(f"Found paper: {paper.title}")
+        id = paper.get_short_id()
+        if _paper := db.get_papers(id):
+            _msg = f"Found the paper in the db: {id}"
+            log.info(_msg)
+            await channel.send(_msg)
+        else:
+            _msg = "Could not find paper, looking for similar papers..."
+            log.info(_msg)
+            await channel.send(_msg)
+            embeds = []
+            for paper_dict in db.similarity_search():
+                embeds.append(
+                    discord.Embed(
+                        title=paper_dict["title"],
+                        url=paper_dict["url"],
+                        description=paper_dict["summary"],
+                    )
+                )
+            _msg: str = f"Similar papers ({len(embeds)} total)"
+            log.info(_msg)
+            await channel.send(embeds=embeds)
 
 
 async def list_papers(
@@ -317,6 +371,9 @@ async def author_info(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    llm: str = DEFAULT_LLM,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     **kwargs,
 ) -> None:
     formatted_name = gpt_text(
@@ -330,6 +387,8 @@ async def author_info(
                 "Example response: 'John,Smith'",
             ]
         ),
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     embeds = []
     max_papers_per_author = 3
@@ -347,6 +406,7 @@ async def author_info(
         content=f"Here are the other papers by author: {formatted_name}:",
         embeds=embeds[:10],
     )
+
 
 async def chat(
     msg: discord.Message,
@@ -366,10 +426,12 @@ async def chat(
 
     response = _llm_func(
         prompt=f"{msg.content}",
-        system=" ".join([
+        system=" ".join(
+            [
                 IAM,
                 "Respond to the user's message.",
-            ]),
+            ]
+        ),
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -384,7 +446,6 @@ class Behavior:
 
 
 class PaperBot(discord.Client):
-
     # Channel IDs
     CHANNELS: Dict[str, int] = {
         "papers": 1107745177264726036,
@@ -413,6 +474,9 @@ class PaperBot(discord.Client):
         for action in [
             Behavior("chat", chat, "Chat with the bot."),
             Behavior("add_paper", add_paper, "Add a paper to the db."),
+            Behavior(
+                "find_paper", find_paper, "Find a paper or similar papers in the db."
+            ),
             Behavior("list_papers", list_papers, "List all papers in the db."),
             Behavior("author_info", author_info, "Shares previous work for an author."),
             Behavior("share_sources", share_sources, "Share links for finding papers."),
