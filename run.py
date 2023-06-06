@@ -16,8 +16,9 @@ NAME: str = "paperbot"
 EMOJI: str = "🗃️"
 IAM: str = "".join(
     [
-        f"You are {NAME}, a helpful bot.",
-        "You help people organize arxiv papers.",
+        f"You are {NAME}, a arxiv chatbot.",
+        # f"You are {NAME}, a helpful bot.",
+        # "You help people organize arxiv papers.",
     ]
 )
 SOURCES: Dict[str, str] = {
@@ -110,7 +111,12 @@ def set_palm_key(key=None):
     log.info("Palm API key set.")
 
 
-def palm_text(prompt):
+def palm_text(
+    prompt: str = None,
+    system: str = None,
+    temperature: float = TEMPERATURE,
+    max_tokens: int = MAX_TOKENS,
+):
     """https://developers.generativeai.google/tutorials/text_quickstart"""
 
     models = [
@@ -119,14 +125,18 @@ def palm_text(prompt):
         if "generateText" in m.supported_generation_methods
     ]
     model = models[0].name
-    print(model)
+    
+    if prompt is None:
+        prompt = ""
+
+    if system is not None:
+        prompt = f"{system} {prompt}"
 
     completion = palm.generate_text(
         model=model,
         prompt=prompt,
-        # The maximum length of the response
-        max_output_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
+        max_output_tokens=max_tokens,
+        temperature=temperature,
     )
 
     return completion.result
@@ -289,7 +299,7 @@ async def list_papers(
     await channel.send(embeds=embeds)
 
 
-async def list_sources(
+async def share_sources(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
@@ -306,7 +316,7 @@ async def list_sources(
     await channel.send(content="Here are some sources for papers:", embeds=embeds)
 
 
-async def list_author(
+async def author_info(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
@@ -372,6 +382,10 @@ async def palm_chat(
     response = palm_text(prompt=f"{system} {msg.content}")
     await channel.send(response)
 
+# async def chat(
+        
+# ) -> None:
+#     pass
 
 @dataclass
 class Behavior:
@@ -381,6 +395,7 @@ class Behavior:
 
 
 class PaperBot(discord.Client):
+
     # Channel IDs
     CHANNELS: Dict[str, int] = {
         "papers": 1107745177264726036,
@@ -406,11 +421,11 @@ class PaperBot(discord.Client):
         self.behaviors: Dict[str, Behavior] = {}
         # Populate list of action
         for action in [
-            Behavior("add_paper", add_paper, "Add a paper to the database."),
-            Behavior("list_papers", list_papers, "List all papers in the database."),
-            Behavior("list_sources", list_sources, "List all sources for papers."),
-            Behavior("list_author", list_author, "List all papers by an author."),
             Behavior("chat", gpt_chat, "Chat with the bot."),
+            Behavior("add_paper", add_paper, "Add a paper to the db."),
+            Behavior("list_papers", list_papers, "List all papers in the db."),
+            Behavior("author_info", author_info, "Shares previous work for an author."),
+            Behavior("share_sources", share_sources, "Share links for finding papers."),
         ]:
             self.behaviors[action.name] = action
 
@@ -422,14 +437,12 @@ class PaperBot(discord.Client):
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
             return
-        log.debug(f"Received message: {msg.content}")
+        log.info(f"Received message: {msg.content}")
         if self.user.id in [m.id for m in msg.mentions]:
-            log.debug(f"Mentioned in message by {msg.author.name}")
+            log.info(f"Mentioned in message by {msg.author.name}")
             _system_prompt: List[str] = [
-                IAM,
-                "Determine which behavior the user wants to run.",
-                "Do not explain, Return the name of the behavior only.",
-                "The available behaviors are:",
+                "Choose a behavior from the list below.",
+                "Do not explain, return the name of the behavior only.",
             ]
             for action in self.behaviors.values():
                 _system_prompt.append(f"{action.name}: {action.description}")
