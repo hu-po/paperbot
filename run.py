@@ -29,8 +29,9 @@ SOURCES: Dict[str, str] = {
     "LabML": "https://papers.labml.ai/papers/weekly/",
 }
 
-MAX_TOKENS = 64
-TEMPERATURE = 0
+DEFAULT_LLM: str = "gpt-3.5-turbo"
+DEFAULT_TEMPERATURE: float = 0
+DEFAULT_MAX_TOKENS: int = 64
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -114,8 +115,8 @@ def set_palm_key(key=None):
 def palm_text(
     prompt: str = None,
     system: str = None,
-    temperature: float = TEMPERATURE,
-    max_tokens: int = MAX_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ):
     """https://developers.generativeai.google/tutorials/text_quickstart"""
 
@@ -154,8 +155,8 @@ def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
     system=None,
     model="gpt-3.5-turbo",
-    temperature: float = TEMPERATURE,
-    max_tokens: int = MAX_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     stop: List[str] = ["\n"],
 ):
     if isinstance(prompt, str):
@@ -180,7 +181,7 @@ def summarize_paper(paper: arxiv.Result) -> str:
         prompt=f"{paper.summary}",
         system=" ".join(
             [
-                "You are paperbot.",
+                IAM,
                 "Summarize this abstract in 1 sentence.",
                 "Do not explain, only provide the 1 sentence summary.",
                 "Here is the abstract for the paper:",
@@ -198,8 +199,9 @@ class LocalDB(object):
         "authors": pd.Utf8,
         "published": pd.Utf8,
         "abstract": pd.Utf8,
+        "summary": pd.Utf8,
         "tags": pd.Utf8,
-        "suggester": pd.Utf8,
+        "user": pd.Utf8,
     }
 
     def __init__(
@@ -217,19 +219,10 @@ class LocalDB(object):
             log.info(f"Creating new local DB at {self.filepath}")
             self.df = pd.DataFrame(schema=self.SCHEMA)
 
-    def add_paper(self, paper: arxiv.Result):
-        tags: str = gpt_text(
-            prompt=f"{paper.summary}",
-            system=" ".join(
-                [
-                    "You are paperbot.",
-                    "Create a comma separated list of tags for this paper.",
-                    "Do not explain, only provide the string tags.",
-                    "Here is the abstract for the paper:",
-                ]
-            ),
-            model="gpt-4",
-        )
+    def add_paper(self,
+                  paper: arxiv.Result,
+                  user: str = None,
+                  ):
         _df = pd.DataFrame(
             {
                 "id": paper.get_short_id(),
@@ -238,7 +231,9 @@ class LocalDB(object):
                 "authors": ",".join([author.name for author in paper.authors]),
                 "published": paper.published.strftime("%m/%d/%Y"),
                 "abstract": paper.summary,
-                "tags": tags,
+                "summary": summarize_paper(paper),
+                "tags": ",".join(paper.categories),
+                "user": user or "",
             }
         )
         self.df = self.df.vstack(_df)
@@ -265,13 +260,15 @@ async def add_paper(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    user: str = None,
+    **kwargs,
 ) -> None:
     for paper in find_papers(msg.content):
         log.info(f"Found paper: {paper.title}")
         id = paper.get_short_id()
         _paper = db.get_papers(id)
         if _paper is None:
-            db.add_paper(paper)
+            db.add_paper(paper, user=user)
             _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
@@ -285,6 +282,7 @@ async def list_papers(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    **kwargs,
 ) -> None:
     embeds = []
     for paper_dict in db.list_papers():
@@ -292,10 +290,11 @@ async def list_papers(
             discord.Embed(
                 title=paper_dict["title"],
                 url=paper_dict["url"],
-                description=paper_dict["tags"],
+                description=paper_dict["summary"],
             )
         )
-    log.info("Listing the papers.")
+    _msg: str = f"Listing papers ({len(embeds)} total)"
+    log.info(_msg)
     await channel.send(embeds=embeds)
 
 
@@ -303,6 +302,7 @@ async def share_sources(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    **kwargs,
 ) -> None:
     embeds = []
     for label, url in SOURCES.items():
@@ -320,12 +320,13 @@ async def author_info(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    **kwargs,
 ) -> None:
     formatted_name = gpt_text(
         prompt=f"{msg.content}",
         system=" ".join(
             [
-                "You are paperbot.",
+                IAM,
                 "You extract and format the author name in a message.",
                 "Do not explain, only return one name in the format First,Last.",
                 "Example message: 'I am interested in the work of John Smith.'",
@@ -350,42 +351,33 @@ async def author_info(
         embeds=embeds[:10],
     )
 
-
-async def gpt_chat(
+async def chat(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: LocalDB,
+    llm: str = DEFAULT_LLM,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    **kwargs,
 ) -> None:
-    response = gpt_text(
+    assert llm in ["gpt3.5-turbo", "gpt4", "palm"]
+    _llm_func: Callable = None
+    if llm.startswith("gpt"):
+        _llm_func = gpt_text
+    elif llm.startswith("palm"):
+        _llm_func = palm_text
+
+    response = _llm_func(
         prompt=f"{msg.content}",
-        system=" ".join(
-            [
+        system=" ".join([
                 IAM,
                 "Respond to the user's message.",
-            ]
-        ),
+            ]),
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     await channel.send(response)
 
-
-async def palm_chat(
-    msg: discord.Message,
-    channel: discord.TextChannel,
-    db: LocalDB,
-) -> None:
-    system = " ".join(
-        [
-            IAM,
-            "Respond to the user's message. This is the user's message:",
-        ]
-    )
-    response = palm_text(prompt=f"{system} {msg.content}")
-    await channel.send(response)
-
-# async def chat(
-        
-# ) -> None:
-#     pass
 
 @dataclass
 class Behavior:
@@ -406,8 +398,9 @@ class PaperBot(discord.Client):
         self,
         *args,
         channel_name: str = "bot-debug",
-        max_response_tokens: int = 32,
-        default_llm: str = "gpt3.5-turbo",
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        default_llm: str = DEFAULT_LLM,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -415,13 +408,13 @@ class PaperBot(discord.Client):
         if self.CHANNELS.get(channel_name, None) is None:
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
-        self.max_response_tokens: int = max_response_tokens
+        self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
-        assert self.default_llm in ["gpt3.5-turbo", "gpt4", "palm"]
+        self.temperature: float = temperature
         self.behaviors: Dict[str, Behavior] = {}
         # Populate list of action
         for action in [
-            Behavior("chat", gpt_chat, "Chat with the bot."),
+            Behavior("chat", chat, "Chat with the bot."),
             Behavior("add_paper", add_paper, "Add a paper to the db."),
             Behavior("list_papers", list_papers, "List all papers in the db."),
             Behavior("author_info", author_info, "Shares previous work for an author."),
@@ -455,10 +448,14 @@ class PaperBot(discord.Client):
                 _msg = f"Running behavior: {behavior_guess}."
                 log.info(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
-                await behavior(
+                await behavior.func(
                     msg,
                     self.get_channel(self.channel_id),
                     self.db,
+                    llm=self.default_llm,
+                    user=msg.author.name,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
                 )
             else:
                 _msg = f"Could not find behavior: {behavior_guess}."
