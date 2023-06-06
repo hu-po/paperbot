@@ -200,7 +200,7 @@ def get_embedding(
         model=model,
         input=paper.summary,
     )
-    return np.array(embedding["data"][0]["embedding"])
+    return ",".join([str(x) for x in embedding["data"][0]["embedding"]])
 
 
 class LocalDB(object):
@@ -214,7 +214,7 @@ class LocalDB(object):
         "summary": pd.Utf8,
         "tags": pd.Utf8,
         "user": pd.Utf8,
-        "embedding": pd.Array,
+        "embedding": pd.Utf8,
     }
 
     def __init__(
@@ -254,11 +254,13 @@ class LocalDB(object):
         self.df = self.df.vstack(_df)
         self.save()
 
-    def similarity_search(self, paper: arxiv.Result, k: int = 5):
-        embedding: np.ndarray = get_embedding(paper)
-        cosine_sim: np.ndarray = np.dot(embedding, self.df["embedding"].values.T)
+    def similarity_search(self, paper: arxiv.Result, k: int = 1):
+        embedding_str = get_embedding(paper)
+        embedding: np.ndarray = np.array([float(x) for x in embedding_str.split(",")])
+        df_embeddings: np.ndarray = np.array([np.array([float(x) for x in e.split(",")]) for e in self.df["embedding"]])
+        cosine_sim: np.ndarray = np.dot(embedding, df_embeddings.T)
         top_k_idx: np.ndarray = np.argpartition(cosine_sim, -k)[-k:]
-        yield from self.df.iloc[top_k_idx].iter_rows(named=True)
+        yield from self.df[top_k_idx].iter_rows(named=True)
 
     def list_papers(self) -> Dict[str, Any]:
         yield from self.df.iter_rows(named=True)
@@ -296,27 +298,11 @@ async def add_paper(
             _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
-
-
-async def find_paper(
-    msg: discord.Message,
-    channel: discord.TextChannel,
-    db: LocalDB,
-    **kwargs,
-) -> None:
-    for paper in find_papers(msg.content):
-        log.info(f"Found paper: {paper.title}")
-        id = paper.get_short_id()
-        if _paper := db.get_papers(id):
-            _msg = f"Found the paper in the db: {id}"
-            log.info(_msg)
-            await channel.send(_msg)
-        else:
-            _msg = "Could not find paper, looking for similar papers..."
+            _msg = "Looking for similar papers..."
             log.info(_msg)
             await channel.send(_msg)
             embeds = []
-            for paper_dict in db.similarity_search():
+            for paper_dict in db.similarity_search(paper):
                 embeds.append(
                     discord.Embed(
                         title=paper_dict["title"],
@@ -474,9 +460,6 @@ class PaperBot(discord.Client):
         for action in [
             Behavior("chat", chat, "Chat with the bot."),
             Behavior("add_paper", add_paper, "Add a paper to the db."),
-            Behavior(
-                "find_paper", find_paper, "Find a paper or similar papers in the db."
-            ),
             Behavior("list_papers", list_papers, "List all papers in the db."),
             Behavior("author_info", author_info, "Shares previous work for an author."),
             Behavior("share_sources", share_sources, "Share links for finding papers."),
