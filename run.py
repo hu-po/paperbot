@@ -111,6 +111,13 @@ def set_palm_key(key=None):
     # palm.configure(api_key=key)
     log.info("Palm API key set.")
 
+def find_papers(msg: str) -> Iterator[arxiv.Result]:
+    pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
+    matches = re.findall(pattern, msg)
+    for arxiv_id in matches:
+        for paper in arxiv.Search(id_list=[arxiv_id]).results():
+            yield paper
+
 
 def palm_text(
     prompt: str = None,
@@ -141,15 +148,6 @@ def palm_text(
     )
 
     return completion.result
-
-
-def find_papers(msg: str) -> Iterator[arxiv.Result]:
-    pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
-    matches = re.findall(pattern, msg)
-    for arxiv_id in matches:
-        for paper in arxiv.Search(id_list=[arxiv_id]).results():
-            yield paper
-
 
 def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
@@ -266,14 +264,13 @@ async def add_paper(
     for paper in find_papers(msg.content):
         log.info(f"Found paper: {paper.title}")
         id = paper.get_short_id()
-        _paper = db.get_papers(id)
-        if _paper is None:
-            db.add_paper(paper, user=user)
-            _msg = f"Adding paper {id}"
+        if _paper := db.get_papers(id):
+            _msg = f"The paper {id} was already posted"
             log.info(_msg)
             await channel.send(_msg)
         else:
-            _msg = f"The paper {id} was already posted"
+            db.add_paper(paper, user=user)
+            _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
 
@@ -443,8 +440,7 @@ class PaperBot(discord.Client):
                 prompt=f"{msg.content}",
                 system="".join(_system_prompt),
             )
-            behavior = self.behaviors.get(behavior_guess, None)
-            if behavior is not None:
+            if behavior := self.behaviors.get(behavior_guess, None):
                 _msg = f"Running behavior: {behavior_guess}."
                 log.info(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
