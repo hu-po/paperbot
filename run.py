@@ -31,6 +31,7 @@ SOURCES: Dict[str, str] = {
 }
 
 DEFAULT_LLM: str = "gpt-3.5-turbo"
+assert DEFAULT_LLM in ["gpt-3.5-turbo", "gpt-4", "palm"]
 DEFAULT_TEMPERATURE: float = 0
 DEFAULT_MAX_TOKENS: int = 64
 
@@ -112,6 +113,7 @@ def set_palm_key(key=None):
     # palm.configure(api_key=key)
     log.info("Palm API key set.")
 
+# TODO: Decorator to time functions and add log statements
 
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
@@ -122,33 +124,27 @@ def find_papers(msg: str) -> Iterator[arxiv.Result]:
 
 
 def palm_text(
-    prompt: str = None,
+    prompt: str = "",
     system: str = None,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ):
     """https://developers.generativeai.google/tutorials/text_quickstart"""
-
     models = [
         m
         for m in palm.list_models()
         if "generateText" in m.supported_generation_methods
     ]
+    assert len(models) > 0, "No models found for PaLM."
     model = models[0].name
-
-    if prompt is None:
-        prompt = ""
-
     if system is not None:
         prompt = f"{system} {prompt}"
-
     completion = palm.generate_text(
         model=model,
         prompt=prompt,
         max_output_tokens=max_tokens,
         temperature=temperature,
     )
-
     return completion.result
 
 
@@ -178,7 +174,7 @@ def gpt_text(
 
 
 def summarize_paper(paper: arxiv.Result) -> str:
-    summary: str = gpt_text(
+    return gpt_text(
         prompt=f"{paper.summary}",
         system=" ".join(
             [
@@ -189,7 +185,6 @@ def summarize_paper(paper: arxiv.Result) -> str:
             ]
         ),
     )
-    return summary
 
 
 def get_embedding(
@@ -200,10 +195,11 @@ def get_embedding(
         model=model,
         input=paper.summary,
     )
-    return ",".join([str(x) for x in embedding["data"][0]["embedding"]])
+    return embedding["data"][0]["embedding"]
 
 
 class LocalDB(object):
+
     SCHEMA: Dict[str, pd.DataType] = {
         "id": pd.Utf8,
         "title": pd.Utf8,
@@ -216,6 +212,7 @@ class LocalDB(object):
         "user": pd.Utf8,
         "embedding": pd.Utf8,
     }
+    # TODO: dictionary list comprehension that adds "embedding_n" for range in EMBEDDING_SIZE
 
     def __init__(
         self,
