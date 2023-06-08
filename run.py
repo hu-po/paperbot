@@ -10,7 +10,7 @@ import arxiv
 import discord
 import google.generativeai as palm
 import openai
-import polars as pd
+import polars as pl
 from polars.exceptions import NoRowsReturnedError
 
 NAME: str = "paperbot"
@@ -22,6 +22,7 @@ IAM: str = "".join(
         # "You help people organize arxiv papers.",
     ]
 )
+DATEFORMAT = "%d.%m.%y"
 SOURCES: Dict[str, str] = {
     "Twitter": "https://twitter.com/i/lists/1653485531546767361",
     "PapersWithCode": "https://paperswithcode.com/",
@@ -51,7 +52,7 @@ ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 log.addHandler(ch)
 # Set up file handler
-logfile_name = f'_paperbot_{datetime.now().strftime("%d%m%y")}.log'
+logfile_name = f'_paperbot_{datetime.now().strftime(DATEFORMAT)}.log'
 logfile_path = os.path.join(LOG_DIR, logfile_name)
 fh = logging.FileHandler(logfile_path)
 fh.setLevel(logging.DEBUG)
@@ -200,80 +201,69 @@ def get_embedding(
 
 class LocalDB(object):
 
-    SCHEMA: Dict[str, pd.DataType] = {
-        "id": pd.Utf8,
-        "title": pd.Utf8,
-        "url": pd.Utf8,
-        "authors": pd.Utf8,
-        "published": pd.Utf8,
-        "abstract": pd.Utf8,
-        "summary": pd.Utf8,
-        "tags": pd.Utf8,
-        "user": pd.Utf8,
-        "embedding": pd.Utf8,
-    }
-    # TODO: dictionary list comprehension that adds "embedding_n" for range in EMBEDDING_SIZE
-
     def __init__(
         self,
         filepath: str = None,
     ):
+        self.df = None # one dataframe to rule them all
         if filepath is None:
             log.info("No filepath provided for local DB.")
             filepath = os.path.join(DATA_DIR, "papers.csv")
         self.filepath = filepath
         if os.path.exists(filepath):
             log.info(f"Loading existing local DB from {self.filepath}")
-            self.df = pd.read_csv(self.filepath)
-        else:
-            log.info(f"Creating new local DB at {self.filepath}")
-            self.df = pd.DataFrame(schema=self.SCHEMA)
+            self.df = pl.read_csv(self.filepath)
+
+    def save(self):
+        log.info(f"Saving local DB to {self.filepath}")
+        self.df.write_csv(self.filepath)
 
     def add_paper(
         self,
         paper: arxiv.Result,
         user: str = None,
     ):
-        _df = pd.DataFrame(
+        _df = pl.DataFrame(
             {
                 "id": paper.get_short_id(),
                 "title": paper.title,
                 "url": paper.pdf_url,
                 "authors": ",".join([author.name for author in paper.authors]),
-                "published": paper.published.strftime("%m/%d/%Y"),
+                "published": paper.published.strftime(DATEFORMAT),
                 "abstract": paper.summary,
                 "summary": summarize_paper(paper),
                 "tags": ",".join(paper.categories),
                 "user": user or "",
+                "user_submitted_date": datetime.now().strftime(DATEFORMAT),
+                "votes": 0,
                 "embedding": get_embedding(paper),
             }
         )
         self.df = self.df.vstack(_df)
         self.save()
+        return _df
+
+    def get_papers(self, id: str):
+        if len(self.df) == 0:
+            return None
+        try:
+            match = self.df.row(by_predicate=(pl.col("id") == id))
+        except NoRowsReturnedError:
+            return None
+        return {column: value for column, value in zip(self.df.columns, match)}
+
+    # TODO: Return with some kind of sorting
+    def list_papers(self) -> Dict[str, Any]:
+        yield from self.df.iter_rows(named=True)
 
     def similarity_search(self, paper: arxiv.Result, k: int = 1):
+        # TODO: Refactor to account for multiple columns
         embedding_str = get_embedding(paper)
         embedding: np.ndarray = np.array([float(x) for x in embedding_str.split(",")])
         df_embeddings: np.ndarray = np.array([np.array([float(x) for x in e.split(",")]) for e in self.df["embedding"]])
         cosine_sim: np.ndarray = np.dot(embedding, df_embeddings.T)
         top_k_idx: np.ndarray = np.argpartition(cosine_sim, -k)[-k:]
         yield from self.df[top_k_idx].iter_rows(named=True)
-
-    def list_papers(self) -> Dict[str, Any]:
-        yield from self.df.iter_rows(named=True)
-
-    def save(self):
-        log.info(f"Saving local DB to {self.filepath}")
-        self.df.write_csv(self.filepath)
-
-    def get_papers(self, id: str):
-        if len(self.df) == 0:
-            return None
-        try:
-            match = self.df.row(by_predicate=(pd.col("id") == id))
-        except NoRowsReturnedError:
-            return None
-        return {column: value for column, value in zip(self.df.columns, match)}
 
 
 async def add_paper(
@@ -400,21 +390,14 @@ async def chat(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     **kwargs,
 ) -> None:
-    assert llm in ["gpt3.5-turbo", "gpt4", "palm"]
     _llm_func: Callable = None
     if llm.startswith("gpt"):
         _llm_func = gpt_text
     elif llm.startswith("palm"):
         _llm_func = palm_text
-
     response = _llm_func(
         prompt=f"{msg.content}",
-        system=" ".join(
-            [
-                IAM,
-                "Respond to the user's message.",
-            ]
-        ),
+        system=IAM,
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -429,6 +412,8 @@ class Behavior:
 
 
 class PaperBot(discord.Client):
+    # TODO: Every X seconds automatically post to the channel
+
     # Channel IDs
     CHANNELS: Dict[str, int] = {
         "papers": 1107745177264726036,
@@ -502,6 +487,17 @@ class PaperBot(discord.Client):
                 log.warning(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
 
+    async def on_error(self, event, *args, **kwargs):
+        _msg = f"Error in event {event}."
+        log.error(_msg)
+        await self.get_channel(self.channel_id).send(_msg)
+    
+    async def on_disconnect(self):
+        _msg = f"{EMOJI}{NAME} has left the chat!"
+        log.info(_msg)
+        await self.get_channel(self.channel_id).send(_msg)
+
+    
 
 if __name__ == "__main__":
     set_discord_key()
