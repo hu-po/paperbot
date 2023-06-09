@@ -454,7 +454,6 @@ class Behavior:
 
 
 class PaperBot(discord.Client):
-    # TODO: Every X seconds automatically post to the channel
 
     # Channel IDs
     CHANNELS: Dict[str, int] = {
