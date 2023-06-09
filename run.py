@@ -1,14 +1,16 @@
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from typing import Any, Callable, Dict, Iterator, List, Union
 
-import numpy as np
 import arxiv
 import discord
 import google.generativeai as palm
+import numpy as np
 import openai
 import polars as pl
 from polars.exceptions import NoRowsReturnedError
@@ -52,7 +54,7 @@ ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 log.addHandler(ch)
 # Set up file handler
-logfile_name = f'_paperbot_{datetime.now().strftime(DATEFORMAT)}.log'
+logfile_name = f"_paperbot_{datetime.now().strftime(DATEFORMAT)}.log"
 logfile_path = os.path.join(LOG_DIR, logfile_name)
 fh = logging.FileHandler(logfile_path)
 fh.setLevel(logging.DEBUG)
@@ -114,8 +116,21 @@ def set_palm_key(key=None):
     # palm.configure(api_key=key)
     log.info("Palm API key set.")
 
-# TODO: Decorator to time functions and add log statements
 
+def time_and_log(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        duration = end_time - start_time
+        log.info(f"Calling: {func.__name__} - duration: {duration:.2f}")
+        return result
+
+    return wrapper
+
+
+@time_and_log
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
@@ -124,6 +139,7 @@ def find_papers(msg: str) -> Iterator[arxiv.Result]:
             yield paper
 
 
+@time_and_log
 def palm_text(
     prompt: str = "",
     system: str = None,
@@ -149,6 +165,7 @@ def palm_text(
     return completion.result
 
 
+@time_and_log
 def gpt_text(
     prompt: Union[str, List[Dict[str, str]]] = None,
     system=None,
@@ -174,6 +191,7 @@ def gpt_text(
     return response["choices"][0]["message"]["content"]
 
 
+@time_and_log
 def summarize_paper(paper: arxiv.Result) -> str:
     return gpt_text(
         prompt=f"{paper.summary}",
@@ -188,6 +206,7 @@ def summarize_paper(paper: arxiv.Result) -> str:
     )
 
 
+@time_and_log
 def get_embedding(
     paper: arxiv.Result,
     model: str = "text-embedding-ada-002",
@@ -199,13 +218,12 @@ def get_embedding(
     return embedding["data"][0]["embedding"]
 
 
-class LocalDB(object):
-
+class LocalDB:
     def __init__(
         self,
         filepath: str = None,
     ):
-        self.df = None # one dataframe to rule them all
+        self.df = None  # one dataframe to rule them all
         if filepath is None:
             log.info("No filepath provided for local DB.")
             filepath = os.path.join(DATA_DIR, "papers.csv")
@@ -260,12 +278,15 @@ class LocalDB(object):
         # TODO: Refactor to account for multiple columns
         embedding_str = get_embedding(paper)
         embedding: np.ndarray = np.array([float(x) for x in embedding_str.split(",")])
-        df_embeddings: np.ndarray = np.array([np.array([float(x) for x in e.split(",")]) for e in self.df["embedding"]])
+        df_embeddings: np.ndarray = np.array(
+            [np.array([float(x) for x in e.split(",")]) for e in self.df["embedding"]]
+        )
         cosine_sim: np.ndarray = np.dot(embedding, df_embeddings.T)
         top_k_idx: np.ndarray = np.argpartition(cosine_sim, -k)[-k:]
         yield from self.df[top_k_idx].iter_rows(named=True)
 
 
+@time_and_log
 async def add_paper(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -302,6 +323,7 @@ async def add_paper(
             await channel.send(embeds=embeds)
 
 
+@time_and_log
 async def list_papers(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -322,6 +344,7 @@ async def list_papers(
     await channel.send(embeds=embeds)
 
 
+@time_and_log
 async def share_sources(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -340,6 +363,7 @@ async def share_sources(
     await channel.send(content="Here are some sources for papers:", embeds=embeds)
 
 
+@time_and_log
 async def author_info(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -381,6 +405,7 @@ async def author_info(
     )
 
 
+@time_and_log
 async def chat(
     msg: discord.Message,
     channel: discord.TextChannel,
@@ -491,13 +516,12 @@ class PaperBot(discord.Client):
         _msg = f"Error in event {event}."
         log.error(_msg)
         await self.get_channel(self.channel_id).send(_msg)
-    
+
     async def on_disconnect(self):
         _msg = f"{EMOJI}{NAME} has left the chat!"
         log.info(_msg)
         await self.get_channel(self.channel_id).send(_msg)
 
-    
 
 if __name__ == "__main__":
     set_discord_key()
