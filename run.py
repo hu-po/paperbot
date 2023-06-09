@@ -241,28 +241,31 @@ class TinyDB:
         paper: arxiv.Result,
         user: str = None,
     ):
-        _df = pl.DataFrame(
-            {
-                "id": paper.get_short_id(),
-                "title": paper.title,
-                "url": paper.pdf_url,
-                "authors": ",".join([author.name for author in paper.authors]),
-                "published": paper.published.strftime(DATEFORMAT),
-                "abstract": paper.summary,
-                "summary": summarize_paper(paper),
-                "tags": ",".join(paper.categories),
-                "user": user or "",
-                "user_submitted_date": datetime.now().strftime(DATEFORMAT),
-                "votes": 0,
-                "embedding": get_embedding(paper),
-            }
-        )
-        self.df = self.df.vstack(_df)
+        _data = {
+            "id": paper.get_short_id(),
+            "title": paper.title,
+            "url": paper.pdf_url,
+            "authors": ",".join([author.name for author in paper.authors]),
+            "published": paper.published.strftime(DATEFORMAT),
+            "abstract": paper.summary,
+            "summary": summarize_paper(paper),
+            "tags": ",".join(paper.categories),
+            "user": user or "",
+            "user_submitted_date": datetime.now().strftime(DATEFORMAT),
+            "votes": 0,
+        }
+        for i, val in enumerate(get_embedding(paper)):
+            _data[f"embedding_{i}"] = val
+        _df = pl.DataFrame(_data)
+        if self.df is None:
+            self.df = _df
+        else:
+            self.df = self.df.vstack(_df)
         self.save()
         return _df
 
     def get_papers(self, id: str):
-        if len(self.df) == 0:
+        if self.df is None or len(self.df) == 0:
             return None
         try:
             match = self.df.row(by_predicate=(pl.col("id") == id))
@@ -280,16 +283,23 @@ class TinyDB:
             sorted_df = self.df
         yield from sorted_df.iter_rows(named=True)
 
-    def similarity_search(self, paper: arxiv.Result, k: int = 1):
-        # TODO: Refactor to account for multiple columns
-        embedding_str = get_embedding(paper)
-        embedding: np.ndarray = np.array([float(x) for x in embedding_str.split(",")])
+    def similarity_search(self, paper: arxiv.Result, k: int = 3):
+        if self.df is None or len(self.df) == 0:
+            return None
+        k = min(k, len(self.df))
+        embedding: List[float] = get_embedding(paper)
+        embedding: np.ndarray = np.array(embedding)
         df_embeddings: np.ndarray = np.array(
-            [np.array([float(x) for x in e.split(",")]) for e in self.df["embedding"]]
+            self.df[[f"embedding_{x}" for x in range(1536)]]
         )
         cosine_sim: np.ndarray = np.dot(embedding, df_embeddings.T)
-        top_k_idx: np.ndarray = np.argpartition(cosine_sim, -k)[-k:]
-        yield from self.df[top_k_idx].iter_rows(named=True)
+        # Create new Polars dataframe with cosine similarity as column
+        _df = self.df[["title", "url", "summary"]]
+        _df = _df.with_columns(pl.from_numpy(cosine_sim, schema=["cosine_sim"]))
+        # Sort by cosine similarity
+        _df = _df.sort(by="cosine_sim", descending=True)
+        # Return the top k rows, but skip the first row
+        yield from _df.head(k + 1).tail(k).iter_rows(named=True)
 
 
 @time_and_log
@@ -316,12 +326,12 @@ async def add_paper(
             log.info(_msg)
             await channel.send(_msg)
             embeds = []
-            for paper_dict in db.similarity_search(paper):
+            for _paper in db.similarity_search(paper):
                 embeds.append(
                     discord.Embed(
-                        title=paper_dict["title"],
-                        url=paper_dict["url"],
-                        description=paper_dict["summary"],
+                        title=_paper["title"],
+                        url=_paper["url"],
+                        description=f"Similarity: {_paper['cosine_sim']:.2f}\n\n{_paper['summary']}",
                     )
                 )
             _msg: str = f"Similar papers ({len(embeds)} total)"
@@ -517,11 +527,6 @@ class PaperBot(discord.Client):
                 _msg = f"Could not find behavior: {behavior_guess}."
                 log.warning(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
-
-    async def on_error(self, event, *args, **kwargs):
-        _msg = f"Error in event {event}."
-        log.error(_msg)
-        await self.get_channel(self.channel_id).send(_msg)
 
     async def on_disconnect(self):
         _msg = f"{EMOJI}{NAME} has left the chat!"
