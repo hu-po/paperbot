@@ -8,6 +8,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import arxiv
+import asyncio
 import discord
 import google.generativeai as palm
 import numpy as np
@@ -468,6 +469,7 @@ class PaperBot(discord.Client):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
+        update_interval: int = 10,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -478,6 +480,7 @@ class PaperBot(discord.Client):
         self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
         self.temperature: float = temperature
+        self.update_interval: int = update_interval
         self.behaviors: Dict[str, Behavior] = {}
         # Populate list of action
         for action in [
@@ -493,6 +496,21 @@ class PaperBot(discord.Client):
         _msg = f"{EMOJI}{NAME} has entered the chat!"
         log.info(_msg)
         await self.get_channel(self.channel_id).send(_msg)
+
+    async def setup_hook(self) -> None:
+        self.bg_task = self.loop.create_task(self.post_message())
+
+    async def post_message(self):
+        await self.wait_until_ready()
+        while not self.is_closed():
+            _msg: str = gpt_text(
+                prompt="Say something short and funny.",
+                system=IAM,
+                temperature=1,
+            )
+            _msg = f"{EMOJI}{NAME} {_msg}"
+            await self.get_channel(self.channel_id).send(_msg)
+            await asyncio.sleep(self.update_interval)
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
