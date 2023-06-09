@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, Dict, Iterator, List, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import arxiv
 import discord
@@ -218,7 +218,7 @@ def get_embedding(
     return embedding["data"][0]["embedding"]
 
 
-class LocalDB:
+class TinyDB:
     def __init__(
         self,
         filepath: str = None,
@@ -270,9 +270,15 @@ class LocalDB:
             return None
         return {column: value for column, value in zip(self.df.columns, match)}
 
-    # TODO: Return with some kind of sorting
-    def list_papers(self) -> Dict[str, Any]:
-        yield from self.df.iter_rows(named=True)
+    def list_papers(self, sort_by: Optional[str] = "title") -> Dict[str, Any]:
+        if sort_by:
+            if sort_by in self.df.columns:
+                sorted_df = self.df.sort(by=sort_by)
+            else:
+                raise ValueError(f"Column '{sort_by}' does not exist in the dataframe.")
+        else:
+            sorted_df = self.df
+        yield from sorted_df.iter_rows(named=True)
 
     def similarity_search(self, paper: arxiv.Result, k: int = 1):
         # TODO: Refactor to account for multiple columns
@@ -290,7 +296,7 @@ class LocalDB:
 async def add_paper(
     msg: discord.Message,
     channel: discord.TextChannel,
-    db: LocalDB,
+    db: TinyDB,
     user: str = None,
     **kwargs,
 ) -> None:
@@ -327,7 +333,7 @@ async def add_paper(
 async def list_papers(
     msg: discord.Message,
     channel: discord.TextChannel,
-    db: LocalDB,
+    db: TinyDB,
     **kwargs,
 ) -> None:
     embeds = []
@@ -348,7 +354,7 @@ async def list_papers(
 async def share_sources(
     msg: discord.Message,
     channel: discord.TextChannel,
-    db: LocalDB,
+    db: TinyDB,
     **kwargs,
 ) -> None:
     embeds = []
@@ -367,7 +373,7 @@ async def share_sources(
 async def author_info(
     msg: discord.Message,
     channel: discord.TextChannel,
-    db: LocalDB,
+    db: TinyDB,
     llm: str = DEFAULT_LLM,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -409,7 +415,7 @@ async def author_info(
 async def chat(
     msg: discord.Message,
     channel: discord.TextChannel,
-    db: LocalDB,
+    db: TinyDB,
     llm: str = DEFAULT_LLM,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -455,7 +461,7 @@ class PaperBot(discord.Client):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.db = LocalDB()
+        self.db = TinyDB()
         if self.CHANNELS.get(channel_name, None) is None:
             raise ValueError(f"Channel {channel_name} not found.")
         self.channel_id: int = self.CHANNELS[channel_name]
