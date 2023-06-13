@@ -251,6 +251,7 @@ class TinyDB:
             "abstract": paper.summary,
             "summary": summarize_paper(paper),
             "tags": ",".join(paper.categories),
+            # TODO: User voting, heuristic based on "freshness"
             "user": user or "",
             "user_submitted_date": datetime.now().strftime(DATEFORMAT),
             "votes": 0,
@@ -446,6 +447,9 @@ async def chat(
     await channel.send(response)
 
 
+# TODO: Use GPT API to select function
+# https://openai.com/blog/function-calling-and-other-api-updates
+
 @dataclass
 class Behavior:
     name: str
@@ -457,6 +461,7 @@ class PaperBot(discord.Client):
 
     # Channel IDs
     CHANNELS: Dict[str, int] = {
+        # TODO: Run bot on main paper channel for a day
         "papers": 1107745177264726036,
         "bot-debug": 1110662456323342417,
     }
@@ -503,6 +508,7 @@ class PaperBot(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             _msg: str = gpt_text(
+                #TODO: Return priority queue for papers
                 prompt="Say something short and funny.",
                 system=IAM,
                 temperature=1,
