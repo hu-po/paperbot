@@ -321,7 +321,8 @@ class TinyDB:
             # TODO: User voting, heuristic based on "freshness"
             "user": user or "",
             "user_submitted_date": datetime.now().strftime(DATEFORMAT),
-            "votes": 0,
+            "votes": user or "",
+            "votes_count": 0,
         }
         for i, val in enumerate(get_embedding(paper)):
             _data[f"embedding_{i}"] = val
@@ -352,6 +353,26 @@ class TinyDB:
             sorted_df = self.df
         yield from sorted_df.iter_rows(named=True)
 
+    def vote_for_paper(self, paper: arxiv.Result, user: str):
+        user = str(user)
+        paper_id = paper.get_short_id()
+        paper_mask = self.df['id'] == paper_id
+        if paper_mask.sum() == 0:
+            return f"Paper with id {paper_id} is not in the database."
+        matches_df: pl.DataFrame = self.df.filter(paper_mask).head(1)
+        votes_raw: str = matches_df['votes'].to_list()[0]
+        votes: List[str] = []
+        if len(votes_raw) > 0:
+            votes = [str(_) for _ in votes_raw.split(',')]
+        if user in votes:
+            return f"User {user} has already voted for this paper."
+        votes.append(user)
+        matches_df = matches_df.with_columns(pl.col("votes").apply(lambda _: ','.join(votes)))
+        matches_df = matches_df.with_columns(pl.col("votes_count").apply(lambda _: len(votes)))
+        self.df.update(matches_df)
+        self.save()
+        return f"User {user} has voted for paper {paper_id}."
+        
     def similarity_search(self, paper: arxiv.Result, k: int = 3):
         if self.df is None or len(self.df) == 0:
             return None
@@ -376,7 +397,6 @@ async def add_paper(
     msg: discord.Message,
     channel: discord.TextChannel,
     db: TinyDB,
-    user: str = None,
     **kwargs,
 ) -> None:
     for paper in find_papers(msg.content):
@@ -387,7 +407,7 @@ async def add_paper(
             log.info(_msg)
             await channel.send(_msg)
         else:
-            db.add_paper(paper, user=user)
+            db.add_paper(paper, user=msg.author.id)
             _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
@@ -427,6 +447,20 @@ async def list_papers(
     _msg: str = f"Listing papers ({len(embeds)} total)"
     log.info(_msg)
     await channel.send(embeds=embeds)
+
+
+@time_and_log
+async def vote_for_paper(
+    msg: discord.Message,
+    channel: discord.TextChannel,
+    db: TinyDB,
+    **kwargs,
+) -> None:
+    for paper in find_papers(msg.content):
+        log.info(f"Found paper: {paper.title}")
+        _msg = db.vote_for_paper(paper, msg.author.id)
+        log.info(_msg)
+        await channel.send(_msg)
 
 
 @time_and_log
@@ -556,6 +590,11 @@ class PaperBot(discord.Client):
                 description="Add a paper to the db.",
             ),
             Behavior(
+                name="vote_for_paper",
+                func=vote_for_paper,
+                description="User votes for a paper.",
+            ),
+            Behavior(
                 name="list_papers",
                 func=list_papers,
                 description="List all papers in the db.",
@@ -621,7 +660,6 @@ class PaperBot(discord.Client):
                     self.get_channel(self.channel_id),
                     self.db,
                     llm=self.default_llm,
-                    user=msg.author.name,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 )
