@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial, wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+import json
 
 import arxiv
 import discord
@@ -244,14 +245,7 @@ def gpt_function(
         log.info(f"Function call detected {behavior_name}")
         if behavior := behaviors.get(behavior_name, None):
             log.info(f"Calling behavior {behavior_name}")
-            _callable: Callable = behavior.func
-            for key, value in _func_info.items():
-                if key == "name":
-                    continue
-                if key == "aruments":
-                    continue
-                _callable: Callable = partial(_callable, key=value)
-            return _callable
+            return partial(behavior.func, **json.loads(_func_info["arguments"]))
         else:
             log.warning(f"Function {behavior_name} not found in function_dict.")
             return None
@@ -345,8 +339,10 @@ class TinyDB:
 
     def list_papers(self, sort_by: Optional[str] = "title") -> Dict[str, Any]:
         if sort_by:
+            if sort_by in ["votes", "votes_count", "voting"]:
+                sort_by = "votes_count"
             if sort_by in self.df.columns:
-                sorted_df = self.df.sort(by=sort_by)
+                sorted_df = self.df.sort(by=sort_by, descending=True)
             else:
                 raise ValueError(f"Column '{sort_by}' does not exist in the dataframe.")
         else:
@@ -436,12 +432,14 @@ async def list_papers(
     **kwargs,
 ) -> None:
     embeds = []
-    for paper_dict in db.list_papers():
+    for i, paper_dict in enumerate(db.list_papers(sort_by=kwargs.get("sort_by"))):
+        if i >= kwargs.get("num_papers", 10):
+            break
         embeds.append(
             discord.Embed(
                 title=paper_dict["title"],
                 url=paper_dict["url"],
-                description=paper_dict["summary"],
+                description=f"votes: {paper_dict['votes_count']}\n\n{paper_dict['summary']}",
             )
         )
     _msg: str = f"Listing papers ({len(embeds)} total)"
@@ -598,6 +596,21 @@ class PaperBot(discord.Client):
                 name="list_papers",
                 func=list_papers,
                 description="List all papers in the db.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "sort_by": {
+                            "type": "string",
+                            "description": "Sort by field.",
+                        },
+                        "num_papers": {
+                            "type": "integer",
+                            "description": "Number of papers to list.",
+                            "default": 3,
+                        },
+                    },
+                    "required": [],
+                }
             ),
             Behavior(
                 name="author_info",
