@@ -1,14 +1,14 @@
+import asyncio
 import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from functools import wraps
+from functools import partial, wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import arxiv
-import asyncio
 import discord
 import google.generativeai as palm
 import numpy as np
@@ -131,6 +131,36 @@ def time_and_log(func):
     return wrapper
 
 
+def default_behavior_parameters():
+    return {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+
+@dataclass
+class Behavior:
+    name: str
+    func: Callable
+    description: str
+    parameters: Dict[str, Any] = field(default_factory=default_behavior_parameters)
+    # {
+    #     "type": "object",
+    #     "properties": {
+    #         "location": {
+    #             "type": "string",
+    #             "description": "The city and state, e.g. San Francisco, CA",
+    #         },
+    #         "unit": {
+    #             "type": "string",
+    #             "enum": ["celsius", "fahrenheit"],
+    #         },
+    #     },
+    #     "required": ["location"],
+    # }
+
+
 @time_and_log
 def find_papers(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
@@ -190,6 +220,43 @@ def gpt_text(
         stop=stop,
     )
     return response["choices"][0]["message"]["content"]
+
+
+@time_and_log
+def gpt_function(
+    prompt: str = None,
+    model="gpt-3.5-turbo-0613",
+    functions: List[str] = None,
+    behaviors: Dict[str, Behavior] = None,
+) -> Union[None, Callable]:
+    log.debug(f"Function call to GPT {model}: \n {prompt}")
+    response: Dict = openai.ChatCompletion.create(
+        messages=[{"role": "user", "content": prompt}],
+        model=model,
+        functions=functions,
+        function_call="auto",
+    )
+    message: Dict = response["choices"][0]["message"]
+    # Step 2, check if the model wants to call a function
+    if message.get("function_call", None):
+        _func_info: Dict = message["function_call"]
+        behavior_name: str = _func_info.get("name", None)
+        log.info(f"Function call detected {behavior_name}")
+        if behavior := behaviors.get(behavior_name, None):
+            log.info(f"Calling behavior {behavior_name}")
+            _callable: Callable = behavior.func
+            for key, value in _func_info.items():
+                if key == "name":
+                    continue
+                if key == "aruments":
+                    continue
+                _callable: Callable = partial(_callable, key=value)
+            return _callable
+        else:
+            log.warning(f"Function {behavior_name} not found in function_dict.")
+            return None
+    log.warning("No function call detected in GPT response.")
+    return None
 
 
 @time_and_log
@@ -447,18 +514,7 @@ async def chat(
     await channel.send(response)
 
 
-# TODO: Use GPT API to select function
-# https://openai.com/blog/function-calling-and-other-api-updates
-
-@dataclass
-class Behavior:
-    name: str
-    func: Callable
-    description: str
-
-
 class PaperBot(discord.Client):
-
     # Channel IDs
     CHANNELS: Dict[str, int] = {
         # TODO: Run bot on main paper channel for a day
@@ -473,7 +529,7 @@ class PaperBot(discord.Client):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
-        update_interval: int = 10,
+        update_interval: int = 10000,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -486,15 +542,43 @@ class PaperBot(discord.Client):
         self.temperature: float = temperature
         self.update_interval: int = update_interval
         self.behaviors: Dict[str, Behavior] = {}
+        self.functions: List[Dict] = []
         # Populate list of action
         for action in [
-            Behavior("chat", chat, "Chat with the bot."),
-            Behavior("add_paper", add_paper, "Add a paper to the db."),
-            Behavior("list_papers", list_papers, "List all papers in the db."),
-            Behavior("author_info", author_info, "Shares previous work for an author."),
-            Behavior("share_sources", share_sources, "Share links for finding papers."),
+            Behavior(
+                name="chat",
+                func=chat,
+                description="Chat with the bot.",
+            ),
+            Behavior(
+                name="add_paper",
+                func=add_paper,
+                description="Add a paper to the db.",
+            ),
+            Behavior(
+                name="list_papers",
+                func=list_papers,
+                description="List all papers in the db.",
+            ),
+            Behavior(
+                name="author_info",
+                func=author_info,
+                description="Shares previous work for an author.",
+            ),
+            Behavior(
+                name="share_sources",
+                func=share_sources,
+                description="Share links for finding papers.",
+            ),
         ]:
             self.behaviors[action.name] = action
+            self.functions.append(
+                {
+                    "name": action.name,
+                    "description": action.description,
+                    "parameters": action.parameters,
+                }
+            )
 
     async def on_ready(self):
         _msg = f"{EMOJI}{NAME} has entered the chat!"
@@ -508,7 +592,7 @@ class PaperBot(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             _msg: str = gpt_text(
-                #TODO: Return priority queue for papers
+                # TODO: Return priority queue for papers
                 prompt="Say something short and funny.",
                 system=IAM,
                 temperature=1,
@@ -523,21 +607,16 @@ class PaperBot(discord.Client):
         log.info(f"Received message: {msg.content}")
         if self.user.id in [m.id for m in msg.mentions]:
             log.info(f"Mentioned in message by {msg.author.name}")
-            _system_prompt: List[str] = [
-                "Choose a behavior from the list below.",
-                "Do not explain, return the name of the behavior only.",
-            ]
-            for action in self.behaviors.values():
-                _system_prompt.append(f"{action.name}: {action.description}")
-            behavior_guess: str = gpt_text(
+            if _callable := gpt_function(
                 prompt=f"{msg.content}",
-                system="".join(_system_prompt),
-            )
-            if behavior := self.behaviors.get(behavior_guess, None):
-                _msg = f"Running behavior: {behavior_guess}."
+                model="gpt-3.5-turbo-0613",
+                functions=self.functions,
+                behaviors=self.behaviors,
+            ):
+                _msg = f"Running behavior: {_callable.func.__name__}."
                 log.info(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
-                await behavior.func(
+                await _callable(
                     msg,
                     self.get_channel(self.channel_id),
                     self.db,
@@ -546,10 +625,6 @@ class PaperBot(discord.Client):
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 )
-            else:
-                _msg = f"Could not find behavior: {behavior_guess}."
-                log.warning(_msg)
-                await self.get_channel(self.channel_id).send(_msg)
 
     async def on_disconnect(self):
         _msg = f"{EMOJI}{NAME} has left the chat!"
