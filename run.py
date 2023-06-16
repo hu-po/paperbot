@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -7,7 +8,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial, wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
-import json
 
 import arxiv
 import discord
@@ -22,8 +22,8 @@ EMOJI: str = "🗃️"
 IAM: str = "".join(
     [
         f"You are {NAME}, a arxiv chatbot.",
-        # f"You are {NAME}, a helpful bot.",
         # "You help people organize arxiv papers.",
+        # "You use lots of emojis.",
     ]
 )
 DATEFORMAT = "%d.%m.%y"
@@ -45,8 +45,8 @@ KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
-
 os.makedirs(LOG_DIR, exist_ok=True)
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("paperbot")
 formatter = logging.Formatter(f"{EMOJI}" + "|%(asctime)s|%(message)s")
@@ -69,7 +69,7 @@ log.info(f"DATA_DIR: {DATA_DIR}")
 log.info(f"LOG_DIR: {LOG_DIR}")
 
 
-def set_openai_key(key=None):
+def set_openai_key(key=None) -> str:
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "openai.txt"), "r") as f:
@@ -77,36 +77,34 @@ def set_openai_key(key=None):
         except FileNotFoundError:
             log.warning("OpenAI API key not found.")
             return
-    os.environ["OPENAI_API_KEY"] = key
     openai.api_key = key
     log.info("OpenAI API key set.")
+    return key
 
 
-def set_discord_key(key=None):
+def set_discord_key(key=None) -> str:
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "discord.txt"), "r") as f:
-                bot_token = f.read()
+                return f.read()
         except FileNotFoundError:
             log.warning("Discord API key not found.")
             return
-    os.environ["DISCORD_BOT_TOKEN"] = bot_token
     log.info("Discord API key set.")
 
 
-def set_huggingface_key(key=None):
+def set_huggingface_key(key=None) -> str:
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "huggingface.txt"), "r") as f:
-                key = f.read()
+                return f.read()
         except FileNotFoundError:
             log.warning("HuggingFace API key not found.")
             return
-    os.environ["HUGGINGFACE_API_KEY"] = key
     log.info("HuggingFace API key set.")
 
 
-def set_palm_key(key=None):
+def set_palm_key(key=None) -> str:
     if key is None:
         try:
             with open(os.path.join(KEYS_DIR, "palm.txt"), "r") as f:
@@ -114,9 +112,9 @@ def set_palm_key(key=None):
         except FileNotFoundError:
             log.warning("Palm API key not found.")
             return
-    os.environ["PALM_API_KEY"] = key
-    # palm.configure(api_key=key)
+    palm.configure(api_key=key)
     log.info("Palm API key set.")
+    return key
 
 
 def time_and_log(func):
@@ -684,12 +682,13 @@ class PaperBot(discord.Client):
 
 
 if __name__ == "__main__":
-    set_discord_key()
+    log.info(f"Starting at {datetime.now().strftime(DATEFORMAT)}")
+    log.info("Setting keys...")
     set_huggingface_key()
     set_openai_key()
     set_palm_key()
-
+    log.info("Starting bot...")
     intents = discord.Intents.default()
     intents.message_content = True
     bot = PaperBot(intents=intents)
-    bot.run(os.environ["DISCORD_BOT_TOKEN"])
+    bot.run(set_discord_key())
