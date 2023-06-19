@@ -570,6 +570,7 @@ class PaperBot(discord.Client):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
+        lifespan: timedelta = timedelta(days=3),
         heartbeat_interval: timedelta = timedelta(hours=1),
         # Max messages per interval
         max_messages: int = 10,
@@ -585,6 +586,7 @@ class PaperBot(discord.Client):
         self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
         self.temperature: float = temperature
+        self.lifespan: timedelta = lifespan
         self.heartbeat_interval: timedelta = heartbeat_interval
         self.max_messages: int = max_messages
         self.max_messages_interval: timedelta = max_messages_interval
@@ -663,6 +665,17 @@ class PaperBot(discord.Client):
         while not self.is_closed():
             # TODO: Return priority queue for papers
             # TODO: Weekly greetings, greetings based on dates/seasons
+            # Programmed death
+            if datetime.now() - self.start_time > self.lifespan:
+                _msg: str = gpt_text(
+                    prompt=f"You have been a good {IAM}. Say your goodbyes to your friends.",
+                    system=IAM,
+                    temperature=1,
+                )
+                _msg = f"{EMOJI}{NAME} {_msg}"
+                await self.get_channel(self.channel_id).send(_msg)
+                log.info(f"Sent goodbye message: {_msg}")
+                await self.close()
             # Send message to the channel if it's been a while
             if datetime.now() - self.last_auto_message > self.auto_message_interval:
                 _msg: str = gpt_text(
@@ -671,8 +684,8 @@ class PaperBot(discord.Client):
                     temperature=1,
                 )
                 _msg = f"{EMOJI}{NAME} {_msg}"
-                log.info(f"Sent auto message: {_msg}")
                 await self.get_channel(self.channel_id).send(_msg)
+                log.info(f"Sent auto message: {_msg}")
             # Keep a small cache of recent messages
             for _datetime, _msg in self.message_cache.items():
                 if datetime.now() - _datetime < self.max_messages_interval:
@@ -698,9 +711,9 @@ class PaperBot(discord.Client):
                 functions=self.functions,
                 behaviors=self.behaviors,
             ):
-                _msg = f"Running behavior {_callable.func.__name__}."
-                log.info(_msg)
+                _msg = f"I am going to {_callable.func.__name__}!"
                 await self.get_channel(self.channel_id).send(_msg)
+                log.info(f"Calling {_callable.func.__name__}...")
                 await _callable(
                     msg,
                     self.get_channel(self.channel_id),
@@ -711,9 +724,7 @@ class PaperBot(discord.Client):
                 )
 
     async def on_disconnect(self):
-        _msg = "Powering off."
-        log.info(_msg)
-        await self.get_channel(self.channel_id).send(_msg)
+        log.info("Disconnected.")
 
 
 if __name__ == "__main__":
