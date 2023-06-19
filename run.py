@@ -27,7 +27,7 @@ IAM: str = "".join(
 )
 DATEFORMAT = "%d.%m.%y"
 SOURCES: Dict[str, str] = {
-    # TODO: Scrape
+    # TODO: Scrape latest info?
     "Twitter": "https://twitter.com/i/lists/1653485531546767361",
     "PapersWithCode": "https://paperswithcode.com/",
     "Reddit": "https://www.reddit.com/user/deephugs/m/ml/",
@@ -36,7 +36,12 @@ SOURCES: Dict[str, str] = {
 }
 
 DEFAULT_LLM: str = "gpt-3.5-turbo"
-assert DEFAULT_LLM in ["gpt-3.5-turbo", "gpt-4", "palm"]
+assert DEFAULT_LLM in [
+    "gpt-3.5-turbo",
+    "gpt-4",
+    "palm",
+    # TODO: llama through hf?
+]
 DEFAULT_TEMPERATURE: float = 0
 DEFAULT_MAX_TOKENS: int = 64
 
@@ -44,12 +49,14 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+DB_FILENAME: str = f"{NAME}{datetime.now().strftime(DATEFORMAT)}.{EMOJI}"
+DB_FILEPATH: str = os.path.join(DATA_DIR, DB_FILENAME)
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("paperbot")
-formatter = logging.Formatter(f"{EMOJI}" + "|%(asctime)s|%(message)s")
+log = logging.getLogger(NAME)
+formatter = logging.Formatter("%(asctime)s|%(message)s")
 # Set up console handler
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
@@ -286,20 +293,17 @@ def get_embedding(
 class TinyDB:
     def __init__(
         self,
-        filepath: str = None,
+        filepath: str = DB_FILEPATH,
     ):
         self.df = None  # one dataframe to rule them all
-        if filepath is None:
-            log.info("No filepath provided for local DB.")
-            filepath = os.path.join(DATA_DIR, "papers.csv")
         self.filepath = filepath
         if os.path.exists(filepath):
             log.info(f"Loading existing local DB from {self.filepath}")
             self.df = pl.read_csv(self.filepath)
 
     def save(self):
-        log.info(f"Saving local DB to {self.filepath}")
         self.df.write_csv(self.filepath)
+        log.info(f"Saved local DB to {self.filepath}")
 
     def add_paper(
         self,
@@ -423,7 +427,8 @@ async def add_paper(
                     discord.Embed(
                         title=_paper["title"],
                         url=_paper["url"],
-                        description=f"Similarity: {_paper['cosine_sim']:.2f}\n\n{_paper['summary']}",
+                        description=f"Similarity: {_paper['cosine_sim']:.2f}\n\n"
+                        f"{_paper['summary']}",
                     )
                 )
             _msg: str = f"Similar papers ({len(embeds)} total)"
@@ -448,7 +453,8 @@ async def list_papers(
             discord.Embed(
                 title=paper_dict["title"],
                 url=paper_dict["url"],
-                description=f"votes: {paper_dict['votes_count']}\n\n{paper_dict['summary']}",
+                description=f"votes: {paper_dict['votes_count']}\n\n"
+                f"{paper_dict['summary']}",
             )
         )
     _msg: str = f"Listing papers ({len(embeds)} total)"
@@ -668,7 +674,8 @@ class PaperBot(discord.Client):
             # Programmed death
             if datetime.now() - self.start_time > self.lifespan:
                 _msg: str = gpt_text(
-                    prompt=f"You have been a good {IAM}. Say your goodbyes to your friends.",
+                    prompt=f"You have been a good {IAM}. "
+                    "Say your goodbyes to your friends.",
                     system=IAM,
                     temperature=1,
                 )
@@ -696,7 +703,8 @@ class PaperBot(discord.Client):
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
-            return        
+            log.info("Ignoring message from self.")
+            return
         if self.user.id in [m.id for m in msg.mentions]:
             log.info(f"Mentioned in message by {msg.author.name}")
             if len(self.message_cache) >= self.max_messages:
