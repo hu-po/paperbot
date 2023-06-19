@@ -5,7 +5,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial, wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
@@ -570,9 +570,11 @@ class PaperBot(discord.Client):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
-        heartbeat_interval: int = 10000,
-        max_messages: int = time.minute * 10,
-        max_messages_interval: int = 10,
+        heartbeat_interval: timedelta = timedelta(hours=1),
+        # Max messages per interval
+        max_messages: int = 10,
+        max_messages_interval: timedelta = timedelta(minutes=10),
+        auto_message_interval: timedelta = timedelta(hours=1),
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -583,7 +585,12 @@ class PaperBot(discord.Client):
         self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
         self.temperature: float = temperature
-        self.heartbeat_interval: int = heartbeat_interval
+        self.heartbeat_interval: timedelta = heartbeat_interval
+        self.max_messages: int = max_messages
+        self.max_messages_interval: timedelta = max_messages_interval
+        self.message_cache: Dict[str, discord.Message] = {}
+        self.auto_message_interval: timedelta = auto_message_interval
+        self.last_auto_message: datetime = datetime.now()
         self.behaviors: Dict[str, Behavior] = {}
         self.functions: List[Dict] = []
         # Populate list of action
@@ -649,34 +656,49 @@ class PaperBot(discord.Client):
         await self.get_channel(self.channel_id).send(_msg)
 
     async def setup_hook(self) -> None:
-        self.bg_task = self.loop.create_task(self.post_message())
+        self.bg_task = self.loop.create_task(self.heartbeat())
 
-    async def post_message(self):
+    async def heartbeat(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            _msg: str = gpt_text(
-                # TODO: Return priority queue for papers
-                prompt="Say something short and funny.",
-                system=IAM,
-                temperature=1,
-            )
-            _msg = f"{EMOJI}{NAME} {_msg}"
-            await self.get_channel(self.channel_id).send(_msg)
-            await asyncio.sleep(self.heartbeat_interval)
+            # TODO: Return priority queue for papers
+            # TODO: Weekly greetings, greetings based on dates/seasons
+            # Send message to the channel if it's been a while
+            if datetime.now() - self.last_auto_message > self.auto_message_interval:
+                _msg: str = gpt_text(
+                    prompt="Say something short and funny.",
+                    system=IAM,
+                    temperature=1,
+                )
+                _msg = f"{EMOJI}{NAME} {_msg}"
+                log.info(f"Sent auto message: {_msg}")
+                await self.get_channel(self.channel_id).send(_msg)
+            # Keep a small cache of recent messages
+            for _datetime, _msg in self.message_cache.items():
+                if datetime.now() - _datetime < self.max_messages_interval:
+                    continue
+                log.info(f"Removing stale message: {_msg}")
+                del self.message_cache[_datetime]
+            await asyncio.sleep(self.heartbeat_interval.total_seconds())
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
-            return
-        log.info(f"Received message: {msg.content}")
+            return        
         if self.user.id in [m.id for m in msg.mentions]:
             log.info(f"Mentioned in message by {msg.author.name}")
+            if len(self.message_cache) >= self.max_messages:
+                _msg = f"I am busy {msg.author.name}, please wait."
+                log.info(_msg)
+                await self.get_channel(self.channel_id).send(_msg)
+                return
+            self.message_cache[datetime.now()] = msg
             if _callable := gpt_function(
                 prompt=f"{msg.content}",
                 model="gpt-3.5-turbo-0613",
                 functions=self.functions,
                 behaviors=self.behaviors,
             ):
-                _msg = f"Running behavior: {_callable.func.__name__}."
+                _msg = f"Running behavior {_callable.func.__name__}."
                 log.info(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
                 await _callable(
@@ -689,7 +711,7 @@ class PaperBot(discord.Client):
                 )
 
     async def on_disconnect(self):
-        _msg = f"{EMOJI}{NAME} has left the chat!"
+        _msg = "Powering off."
         log.info(_msg)
         await self.get_channel(self.channel_id).send(_msg)
 
