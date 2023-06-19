@@ -22,12 +22,12 @@ EMOJI: str = "🗃️"
 IAM: str = "".join(
     [
         f"You are {NAME}, a arxiv chatbot.",
-        # "You help people organize arxiv papers.",
-        # "You use lots of emojis.",
+        "You use lots of emojis.",
     ]
 )
 DATEFORMAT = "%d.%m.%y"
 SOURCES: Dict[str, str] = {
+    # TODO: Scrape
     "Twitter": "https://twitter.com/i/lists/1653485531546767361",
     "PapersWithCode": "https://paperswithcode.com/",
     "Reddit": "https://www.reddit.com/user/deephugs/m/ml/",
@@ -69,6 +69,20 @@ log.info(f"DATA_DIR: {DATA_DIR}")
 log.info(f"LOG_DIR: {LOG_DIR}")
 
 
+def time_and_log(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        duration = end_time - start_time
+        log.debug(f"Calling: {func.__name__} - duration: {duration:.2f}")
+        return result
+
+    return wrapper
+
+
+@time_and_log
 def set_openai_key(key=None) -> str:
     if key is None:
         try:
@@ -82,6 +96,7 @@ def set_openai_key(key=None) -> str:
     return key
 
 
+@time_and_log
 def set_discord_key(key=None) -> str:
     if key is None:
         try:
@@ -93,6 +108,7 @@ def set_discord_key(key=None) -> str:
     log.info("Discord API key set.")
 
 
+@time_and_log
 def set_huggingface_key(key=None) -> str:
     if key is None:
         try:
@@ -104,6 +120,7 @@ def set_huggingface_key(key=None) -> str:
     log.info("HuggingFace API key set.")
 
 
+@time_and_log
 def set_palm_key(key=None) -> str:
     if key is None:
         try:
@@ -115,19 +132,6 @@ def set_palm_key(key=None) -> str:
     palm.configure(api_key=key)
     log.info("Palm API key set.")
     return key
-
-
-def time_and_log(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        duration = end_time - start_time
-        log.info(f"Calling: {func.__name__} - duration: {duration:.2f}")
-        return result
-
-    return wrapper
 
 
 def default_behavior_parameters():
@@ -143,6 +147,7 @@ class Behavior:
     name: str
     func: Callable
     description: str
+    # Return type of OpenAI Functions API
     parameters: Dict[str, Any] = field(default_factory=default_behavior_parameters)
     # {
     #     "type": "object",
@@ -350,23 +355,27 @@ class TinyDB:
     def vote_for_paper(self, paper: arxiv.Result, user: str):
         user = str(user)
         paper_id = paper.get_short_id()
-        paper_mask = self.df['id'] == paper_id
+        paper_mask = self.df["id"] == paper_id
         if paper_mask.sum() == 0:
             return f"Paper with id {paper_id} is not in the database."
         matches_df: pl.DataFrame = self.df.filter(paper_mask).head(1)
-        votes_raw: str = matches_df['votes'].to_list()[0]
+        votes_raw: str = matches_df["votes"].to_list()[0]
         votes: List[str] = []
         if len(votes_raw) > 0:
-            votes = [str(_) for _ in votes_raw.split(',')]
+            votes = [str(_) for _ in votes_raw.split(",")]
         if user in votes:
             return f"User {user} has already voted for this paper."
         votes.append(user)
-        matches_df = matches_df.with_columns(pl.col("votes").apply(lambda _: ','.join(votes)))
-        matches_df = matches_df.with_columns(pl.col("votes_count").apply(lambda _: len(votes)))
+        matches_df = matches_df.with_columns(
+            pl.col("votes").apply(lambda _: ",".join(votes))
+        )
+        matches_df = matches_df.with_columns(
+            pl.col("votes_count").apply(lambda _: len(votes))
+        )
         self.df.update(matches_df)
         self.save()
         return f"User {user} has voted for paper {paper_id}."
-        
+
     def similarity_search(self, paper: arxiv.Result, k: int = 3):
         if self.df is None or len(self.df) == 0:
             return None
@@ -424,14 +433,16 @@ async def add_paper(
 
 @time_and_log
 async def list_papers(
-    msg: discord.Message,
+    message: discord.Message,
     channel: discord.TextChannel,
     db: TinyDB,
     **kwargs,
 ) -> None:
     embeds = []
-    for i, paper_dict in enumerate(db.list_papers(sort_by=kwargs.get("sort_by"))):
-        if i >= kwargs.get("num_papers", 10):
+    num_papers = kwargs.get("num_papers", 10)
+    sort_by = kwargs.get("sort_by")
+    for i, paper_dict in enumerate(db.list_papers(sort_by=sort_by)):
+        if i >= num_papers:
             break
         embeds.append(
             discord.Embed(
@@ -559,7 +570,9 @@ class PaperBot(discord.Client):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
-        update_interval: int = 10000,
+        heartbeat_interval: int = 10000,
+        max_messages: int = time.minute * 10,
+        max_messages_interval: int = 10,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -570,7 +583,7 @@ class PaperBot(discord.Client):
         self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
         self.temperature: float = temperature
-        self.update_interval: int = update_interval
+        self.heartbeat_interval: int = heartbeat_interval
         self.behaviors: Dict[str, Behavior] = {}
         self.functions: List[Dict] = []
         # Populate list of action
@@ -608,7 +621,7 @@ class PaperBot(discord.Client):
                         },
                     },
                     "required": [],
-                }
+                },
             ),
             Behavior(
                 name="author_info",
@@ -649,7 +662,7 @@ class PaperBot(discord.Client):
             )
             _msg = f"{EMOJI}{NAME} {_msg}"
             await self.get_channel(self.channel_id).send(_msg)
-            await asyncio.sleep(self.update_interval)
+            await asyncio.sleep(self.heartbeat_interval)
 
     async def on_message(self, msg: discord.Message):
         if msg.author.id == self.user.id:
