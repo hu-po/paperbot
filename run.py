@@ -49,20 +49,22 @@ DEBUG_MODE: bool = True
 # DEBUG_MODE: bool = False
 
 # Normal Configuration
+DEBUG_LEVEL: int = logging.INFO
 DISCORD_CHANNEL: int = 1107745177264726036  # papers
 LIFESPAN: timedelta = timedelta(days=3)
-HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=30)
+HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=5)
 MAX_MESSAGES: int = 3
-MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=10)
+MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
 # Debug Configuration
 if DEBUG_MODE:
+    DEBUG_LEVEL: int = logging.DEBUG
     DISCORD_CHANNEL: int = 1110662456323342417  # bot-debug
-    LIFESPAN: timedelta = timedelta(seconds=20)
+    LIFESPAN: timedelta = timedelta(minutes=5)
     HEARTBEAT_INTERVAL: timedelta = timedelta(seconds=3)
-    MAX_MESSAGES: int = 2
+    MAX_MESSAGES: int = 5
     MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
-    AUTO_MESSAGES_INTERVAL: timedelta = timedelta(seconds=5)
+    AUTO_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -73,26 +75,26 @@ DB_FILEPATH: str = os.path.join(DATA_DIR, DB_FILENAME)
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=DEBUG_LEVEL)
 log = logging.getLogger(NAME)
 formatter = logging.Formatter("%(asctime)s|%(message)s")
 # Set up console handler
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(DEBUG_LEVEL)
 ch.setFormatter(formatter)
 log.addHandler(ch)
 # Set up file handler
 logfile_name = f"_paperbot_{datetime.now().strftime(DATEFORMAT)}.log"
 logfile_path = os.path.join(LOG_DIR, logfile_name)
 fh = logging.FileHandler(logfile_path)
-fh.setLevel(logging.DEBUG)
+fh.setLevel(DEBUG_LEVEL)
 fh.setFormatter(formatter)
 log.addHandler(fh)
 
-log.info(f"ROOT_DIR: {ROOT_DIR}")
-log.info(f"KEYS_DIR: {KEYS_DIR}")
-log.info(f"DATA_DIR: {DATA_DIR}")
-log.info(f"LOG_DIR: {LOG_DIR}")
+log.debug(f"ROOT_DIR: {ROOT_DIR}")
+log.debug(f"KEYS_DIR: {KEYS_DIR}")
+log.debug(f"DATA_DIR: {DATA_DIR}")
+log.debug(f"LOG_DIR: {LOG_DIR}")
 
 
 def time_and_log(func):
@@ -118,7 +120,7 @@ def set_openai_key(key=None) -> str:
             log.warning("OpenAI API key not found.")
             return
     openai.api_key = key
-    log.info("OpenAI API key set.")
+    log.debug("OpenAI API key set.")
     return key
 
 
@@ -131,7 +133,7 @@ def set_discord_key(key=None) -> str:
         except FileNotFoundError:
             log.warning("Discord API key not found.")
             return
-    log.info("Discord API key set.")
+    log.debug("Discord API key set.")
 
 
 @time_and_log
@@ -143,7 +145,7 @@ def set_huggingface_key(key=None) -> str:
         except FileNotFoundError:
             log.warning("HuggingFace API key not found.")
             return
-    log.info("HuggingFace API key set.")
+    log.debug("HuggingFace API key set.")
 
 
 @time_and_log
@@ -156,7 +158,7 @@ def set_palm_key(key=None) -> str:
             log.warning("Palm API key not found.")
             return
     palm.configure(api_key=key)
-    log.info("Palm API key set.")
+    log.debug("Palm API key set.")
     return key
 
 
@@ -271,7 +273,7 @@ def gpt_function(
     if message.get("function_call", None):
         _func_info: Dict = message["function_call"]
         behavior_name: str = _func_info.get("name", None)
-        log.info(f"Function call detected {behavior_name}")
+        log.debug(f"Function call detected {behavior_name}")
         if behavior := behaviors.get(behavior_name, None):
             log.info(f"Calling behavior {behavior_name}")
             return partial(behavior.func, **json.loads(_func_info["arguments"]))
@@ -463,6 +465,7 @@ async def list_papers(
     await channel.send(embeds=embeds)
     log.info(f"Sending message: {_msg}")
 
+
 @time_and_log
 async def vote_for_paper(
     msg: discord.Message,
@@ -475,7 +478,7 @@ async def vote_for_paper(
         paper_id = paper.get_short_id()
         paper_mask = db.df["id"] == paper_id
         if paper_mask.sum() == 0:
-            _msg =  f"Paper {paper_id} is not in the database."
+            _msg = f"Paper {paper_id} is not in the database."
             await channel.send(_msg)
             log.info(f"Sending message: {_msg}")
             return
@@ -486,21 +489,18 @@ async def vote_for_paper(
             votes = [str(_) for _ in votes_raw.split(",")]
         user_id = str(msg.author.id)
         if user_id in votes:
-            _msg =  f"{msg.author.name} has already voted for this paper."
+            _msg = f"{msg.author.name} has already voted for this paper."
             await channel.send(_msg)
             log.info(f"Sending message: {_msg}")
             return
         votes.append(user_id)
-        _df = _df.with_columns(
-            pl.col("votes").apply(lambda _: ",".join(votes))
-        )
-        _df = _df.with_columns(
-            pl.col("votes_count").apply(lambda _: len(votes))
-        )
+        _df = _df.with_columns(pl.col("votes").apply(lambda _: ",".join(votes)))
+        _df = _df.with_columns(pl.col("votes_count").apply(lambda _: len(votes)))
         db.save(db.df.update(_df))
-        _msg =  f"User {msg.author.name} has voted for paper {paper_id}."
+        _msg = f"User {msg.author.name} has voted for paper {paper_id}."
         await channel.send(_msg)
         log.info(f"Sending message: {_msg}")
+
 
 @time_and_log
 async def share_sources(
@@ -517,7 +517,7 @@ async def share_sources(
                 url=url,
             )
         )
-    log.info("Listing the sources.")
+    log.debug("Listing the sources.")
     await channel.send(content="Here are some sources for papers:", embeds=embeds)
 
 
@@ -676,9 +676,13 @@ class PaperBot(discord.Client):
             )
 
     async def on_ready(self):
-        _msg = f"{EMOJI}{NAME} has entered the chat!"
-        log.info(_msg)
+        _msg: str = gpt_text(
+            prompt="Say hello to the chat",
+            system=IAM,
+            temperature=1,
+        )
         await self.get_channel(self.channel_id).send(_msg)
+        log.info(f"Sending message: {_msg}")
 
     async def setup_hook(self) -> None:
         self.bg_task = self.loop.create_task(self.heartbeat())
@@ -688,7 +692,6 @@ class PaperBot(discord.Client):
         while not self.is_closed():
             # TODO: Return priority queue for papers
             # TODO: Weekly greetings, greetings based on dates/seasons
-            # TODO: display author name rather than ID
             # TODO: Render the csv file to markdown and post in on a github
             #       repo automatically `from github import Github`
             # TODO: Announcements on the start of every week and the voting results.
@@ -725,11 +728,11 @@ class PaperBot(discord.Client):
             log.info("Ignoring message from self.")
             return
         if self.user.id in [m.id for m in msg.mentions]:
-            log.info(f"Mentioned in message by {msg.author.name}")
+            log.debug(f"Mentioned in message by {msg.author.name}")
             if len(self.message_cache) >= self.max_messages:
                 _msg = f"I am busy {msg.author.name}, please wait."
-                log.info(_msg)
                 await self.get_channel(self.channel_id).send(_msg)
+                log.info(_msg)
                 return
             self.message_cache[datetime.now()] = msg
             if _callable := gpt_function(
@@ -740,7 +743,7 @@ class PaperBot(discord.Client):
             ):
                 _msg = f"I am going to {_callable.func.__name__}!"
                 await self.get_channel(self.channel_id).send(_msg)
-                log.info(f"Calling {_callable.func.__name__}...")
+                log.debug(f"Calling {_callable.func.__name__}...")
                 await _callable(
                     msg,
                     self.get_channel(self.channel_id),
@@ -753,7 +756,6 @@ class PaperBot(discord.Client):
     async def on_disconnect(self):
         await self.get_channel(self.channel_id).send("🪦")
         log.info("Disconnected.")
-
 
 
 if __name__ == "__main__":
