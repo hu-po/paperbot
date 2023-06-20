@@ -751,6 +751,10 @@ class PaperBot(discord.Client):
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                 )
+            else:
+                _msg = "Could not recognize any behavior."
+                _msg += f"Try one of the following: {', '.join(self.behaviors.keys())}"
+                await self.get_channel(self.channel_id).send(_msg)
 
     async def on_disconnect(self):
         await self.get_channel(self.channel_id).send("🪦")
