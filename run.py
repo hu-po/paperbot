@@ -58,11 +58,11 @@ AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
 # Debug Configuration
 if DEBUG_MODE:
     DISCORD_CHANNEL: int = 1110662456323342417  # bot-debug
-    LIFESPAN: timedelta = timedelta(hours=1)
-    HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=1)
-    MAX_MESSAGES: int = 3
+    LIFESPAN: timedelta = timedelta(seconds=20)
+    HEARTBEAT_INTERVAL: timedelta = timedelta(seconds=3)
+    MAX_MESSAGES: int = 2
     MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
-    AUTO_MESSAGES_INTERVAL: timedelta = timedelta(minutes=5)
+    AUTO_MESSAGES_INTERVAL: timedelta = timedelta(seconds=5)
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -609,6 +609,7 @@ class PaperBot(discord.Client):
         self.default_llm: str = default_llm
         self.temperature: float = temperature
         self.lifespan: timedelta = lifespan
+        self.birthdate: datetime = datetime.now()
         self.heartbeat_interval: timedelta = heartbeat_interval
         self.max_messages: int = max_messages
         self.max_messages_interval: timedelta = max_messages_interval
@@ -692,25 +693,23 @@ class PaperBot(discord.Client):
             #       repo automatically `from github import Github`
             # TODO: Announcements on the start of every week and the voting results.
             # Programmed death
-            if datetime.now() - self.start_time > self.lifespan:
+            if datetime.now() - self.birthdate > self.lifespan:
                 _msg: str = gpt_text(
-                    prompt=f"You have been a good {IAM}. "
+                    prompt=f"You have been a good {IAM}."
                     "Say your goodbyes to your friends.",
                     system=IAM,
                     temperature=1,
                 )
-                _msg = f"{EMOJI}{NAME} {_msg}"
                 await self.get_channel(self.channel_id).send(_msg)
                 log.info(f"Sent goodbye message: {_msg}")
                 await self.close()
             # Send message to the channel if it's been a while
-            if datetime.now() - self.last_auto_message > self.auto_message_interval:
+            if datetime.now() - self.last_auto_message >= self.auto_message_interval:
                 _msg: str = gpt_text(
                     prompt="Say something short and funny.",
                     system=IAM,
                     temperature=1,
                 )
-                _msg = f"{EMOJI}{NAME} {_msg}"
                 await self.get_channel(self.channel_id).send(_msg)
                 log.info(f"Sent auto message: {_msg}")
             # Keep a small cache of recent messages
@@ -752,7 +751,9 @@ class PaperBot(discord.Client):
                 )
 
     async def on_disconnect(self):
+        await self.get_channel(self.channel_id).send("🪦")
         log.info("Disconnected.")
+
 
 
 if __name__ == "__main__":
