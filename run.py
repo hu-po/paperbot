@@ -322,7 +322,9 @@ class TinyDB:
             log.info(f"Loading existing local DB from {self.filepath}")
             self.df = pl.read_csv(self.filepath)
 
-    def save(self):
+    def save(self, df: pl.DataFrame = None):
+        if df is not None:
+            self.df = df
         self.df.write_csv(self.filepath)
         log.info(f"Saved local DB to {self.filepath}")
 
@@ -340,11 +342,10 @@ class TinyDB:
             "abstract": paper.summary,
             "summary": summarize_paper(paper),
             "tags": ",".join(paper.categories),
-            # TODO: User voting, heuristic based on "freshness"
             "user": user or "",
             "user_submitted_date": datetime.now().strftime(DATEFORMAT),
             "votes": user or "",
-            "votes_count": 0,
+            "votes_count": 1,
         }
         for i, val in enumerate(get_embedding(paper)):
             _data[f"embedding_{i}"] = val
@@ -419,7 +420,7 @@ async def add_paper(
                     )
                 )
             if len(embeds) == 0:
-                return
+                continue
             _msg: str = f"Similar papers ({len(embeds)} total)"
             log.info(_msg)
             await channel.send(embeds=embeds)
@@ -478,8 +479,8 @@ async def vote_for_paper(
             await channel.send(_msg)
             log.info(f"Sending message: {_msg}")
             return
-        matches_df: pl.DataFrame = db.df.filter(paper_mask).head(1)
-        votes_raw: str = str(matches_df["votes"].to_list()[0])
+        _df: pl.DataFrame = db.df.filter(paper_mask).head(1)
+        votes_raw: str = str(_df["votes"].to_list()[0])
         votes: List[str] = []
         if len(votes_raw) > 0:
             votes = [str(_) for _ in votes_raw.split(",")]
@@ -490,14 +491,13 @@ async def vote_for_paper(
             log.info(f"Sending message: {_msg}")
             return
         votes.append(user_id)
-        matches_df = matches_df.with_columns(
+        _df = _df.with_columns(
             pl.col("votes").apply(lambda _: ",".join(votes))
         )
-        matches_df = matches_df.with_columns(
+        _df = _df.with_columns(
             pl.col("votes_count").apply(lambda _: len(votes))
         )
-        db.df.update(matches_df)
-        db.save()
+        db.save(db.df.update(_df))
         _msg =  f"User {msg.author.name} has voted for paper {paper_id}."
         await channel.send(_msg)
         log.info(f"Sending message: {_msg}")
