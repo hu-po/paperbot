@@ -45,8 +45,8 @@ assert DEFAULT_LLM in [
 DEFAULT_TEMPERATURE: float = 0
 DEFAULT_MAX_TOKENS: int = 64
 
-DEBUG_MODE: bool = True
-# DEBUG_MODE: bool = False
+# DEBUG_MODE: bool = True
+DEBUG_MODE: bool = False
 
 # Normal Configuration
 DEBUG_LEVEL: int = logging.INFO
