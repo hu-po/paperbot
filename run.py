@@ -671,6 +671,9 @@ class PaperBot(discord.Client):
         while not self.is_closed():
             # TODO: Return priority queue for papers
             # TODO: Weekly greetings, greetings based on dates/seasons
+            # TODO: display author name rather than ID
+            # TODO: Render the csv file to markdown and post in on a github repo automatically `from github import Github`
+            # TODO: Announcements on the start of every week and the voting results.
             # Programmed death
             if datetime.now() - self.start_time > self.lifespan:
                 _msg: str = gpt_text(
