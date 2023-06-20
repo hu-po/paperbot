@@ -45,6 +45,25 @@ assert DEFAULT_LLM in [
 DEFAULT_TEMPERATURE: float = 0
 DEFAULT_MAX_TOKENS: int = 64
 
+DEBUG_MODE: bool = True
+# DEBUG_MODE: bool = False
+
+# Normal Configuration
+DISCORD_CHANNEL: int = 1107745177264726036 # papers
+LIFESPAN: timedelta = timedelta(days=3)
+HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=30)
+MAX_MESSAGES: int = 3
+MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=10)
+AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
+# Debug Configuration
+if DEBUG_MODE:
+    DISCORD_CHANNEL: int = 1110662456323342417 # bot-debug
+    LIFESPAN: timedelta = timedelta(hours=1)
+    HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=1)
+    MAX_MESSAGES: int = 3
+    MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
+    AUTO_MESSAGES_INTERVAL: timedelta = timedelta(minutes=5)
+
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
 DATA_DIR = os.path.join(ROOT_DIR, "data")
@@ -562,33 +581,24 @@ async def chat(
 
 
 class PaperBot(discord.Client):
-    # Channel IDs
-    CHANNELS: Dict[str, int] = {
-        # TODO: Run bot on main paper channel for a day
-        "papers": 1107745177264726036,
-        "bot-debug": 1110662456323342417,
-    }
 
     def __init__(
         self,
         *args,
-        channel_name: str = "bot-debug",
+        channel_id: str = DISCORD_CHANNEL,
+        lifespan: timedelta = LIFESPAN,
+        heartbeat_interval: timedelta = HEARTBEAT_INTERVAL,
+        max_messages: int = MAX_MESSAGES,
+        max_messages_interval: timedelta = MAX_MESSAGES_INTERVAL,
+        auto_message_interval: timedelta = AUTO_MESSAGES_INTERVAL,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
-        lifespan: timedelta = timedelta(days=3),
-        heartbeat_interval: timedelta = timedelta(hours=1),
-        # Max messages per interval
-        max_messages: int = 10,
-        max_messages_interval: timedelta = timedelta(minutes=10),
-        auto_message_interval: timedelta = timedelta(hours=1),
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.db = TinyDB()
-        if self.CHANNELS.get(channel_name, None) is None:
-            raise ValueError(f"Channel {channel_name} not found.")
-        self.channel_id: int = self.CHANNELS[channel_name]
+        self.channel_id: int = channel_id
         self.max_tokens: int = max_tokens
         self.default_llm: str = default_llm
         self.temperature: float = temperature
@@ -606,7 +616,7 @@ class PaperBot(discord.Client):
             Behavior(
                 name="chat",
                 func=chat,
-                description="Chat with the bot.",
+                description="Chat with the user message.",
             ),
             Behavior(
                 name="add_paper",
