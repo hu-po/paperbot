@@ -51,11 +51,12 @@ DEBUG_MODE: bool = False
 # Normal Configuration
 DEBUG_LEVEL: int = logging.INFO
 DISCORD_CHANNEL: int = 1107745177264726036  # papers
-LIFESPAN: timedelta = timedelta(days=3)
-HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=2)
-MAX_MESSAGES: int = 100
-MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
+LIFESPAN: timedelta = timedelta(hours=6)
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
+GREETING_MESSAGE_ENABLED: bool = False
+HEARTBEAT_INTERVAL: timedelta = timedelta(seconds=60)
+MAX_MESSAGES: int = 4
+MAX_MESSAGES_INTERVAL: timedelta = timedelta(seconds=10)
 # Debug Configuration
 if DEBUG_MODE:
     DEBUG_LEVEL: int = logging.DEBUG
@@ -65,6 +66,7 @@ if DEBUG_MODE:
     MAX_MESSAGES: int = 5
     MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
     AUTO_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
+    GREETING_MESSAGE_ENABLED: bool = True
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -491,7 +493,7 @@ async def vote_for_paper(
             votes = [str(_) for _ in votes_raw.split(",")]
         user_id = str(msg.author.id)
         if user_id in votes:
-            _msg = f"{msg.author.name} has already voted for this paper."
+            _msg = f"{msg.author.display_name} has already voted for this paper."
             await channel.send(_msg)
             log.info(f"Sending message: {_msg}")
             return
@@ -499,7 +501,7 @@ async def vote_for_paper(
         _df = _df.with_columns(pl.col("votes").apply(lambda _: ",".join(votes)))
         _df = _df.with_columns(pl.col("votes_count").apply(lambda _: len(votes)))
         db.save(db.df.update(_df))
-        _msg = f"User {msg.author.name} has voted for paper {paper_id}."
+        _msg = f"User {msg.author.display_name} has voted for paper {paper_id}."
         await channel.send(_msg)
         log.info(f"Sending message: {_msg}")
 
@@ -599,6 +601,7 @@ class PaperBot(discord.Client):
         max_messages: int = MAX_MESSAGES,
         max_messages_interval: timedelta = MAX_MESSAGES_INTERVAL,
         auto_message_interval: timedelta = AUTO_MESSAGES_INTERVAL,
+        greeting_message_enabled: bool = GREETING_MESSAGE_ENABLED,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         default_llm: str = DEFAULT_LLM,
@@ -616,6 +619,7 @@ class PaperBot(discord.Client):
         self.max_messages: int = max_messages
         self.max_messages_interval: timedelta = max_messages_interval
         self.message_cache: Dict[str, discord.Message] = {}
+        self.greetings_message_enabled: bool = greeting_message_enabled
         self.auto_message_interval: timedelta = auto_message_interval
         self.last_auto_message: datetime = datetime.now()
         self.behaviors: Dict[str, Behavior] = {}
@@ -678,13 +682,14 @@ class PaperBot(discord.Client):
             )
 
     async def on_ready(self):
-        _msg: str = gpt_text(
-            prompt="Say hello to the chat",
-            system=IAM,
-            temperature=1,
-        )
-        await self.get_channel(self.channel_id).send(_msg)
-        log.info(f"Sending message: {_msg}")
+        if self.greetings_message_enabled:
+            _msg: str = gpt_text(
+                prompt="Say hello to the chat",
+                system=IAM,
+                temperature=1,
+            )
+            await self.get_channel(self.channel_id).send(_msg)
+            log.info(f"Sending message: {_msg}")
 
     async def setup_hook(self) -> None:
         self.bg_task = self.loop.create_task(self.heartbeat())
@@ -730,9 +735,9 @@ class PaperBot(discord.Client):
             log.info("Ignoring message from self.")
             return
         if self.user.id in [m.id for m in msg.mentions]:
-            log.debug(f"Mentioned in message by {msg.author.name}")
+            log.debug(f"Mentioned in message by {msg.author.display_name}.")
             if len(self.message_cache) >= self.max_messages:
-                _msg = f"I am busy {msg.author.name}, please wait."
+                _msg = f"I am busy {msg.author.display_name}, please wait."
                 await self.get_channel(self.channel_id).send(_msg)
                 log.info(_msg)
                 return
@@ -750,6 +755,7 @@ class PaperBot(discord.Client):
                     msg,
                     self.get_channel(self.channel_id),
                     self.db,
+                    # TODO: accept message cache for chat
                     llm=self.default_llm,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
