@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial, wraps
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Union
 
 import arxiv
 import discord
@@ -49,7 +49,7 @@ DEBUG_MODE: bool = True
 # DEBUG_MODE: bool = False
 
 # Normal Configuration
-DISCORD_CHANNEL: int = 1107745177264726036 # papers
+DISCORD_CHANNEL: int = 1107745177264726036  # papers
 LIFESPAN: timedelta = timedelta(days=3)
 HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=30)
 MAX_MESSAGES: int = 3
@@ -57,7 +57,7 @@ MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=10)
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
 # Debug Configuration
 if DEBUG_MODE:
-    DISCORD_CHANNEL: int = 1110662456323342417 # bot-debug
+    DISCORD_CHANNEL: int = 1110662456323342417  # bot-debug
     LIFESPAN: timedelta = timedelta(hours=1)
     HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=1)
     MAX_MESSAGES: int = 3
@@ -192,7 +192,7 @@ class Behavior:
 
 
 @time_and_log
-def find_papers(msg: str) -> Iterator[arxiv.Result]:
+def find_paperid_in_msg(msg: str) -> Iterator[arxiv.Result]:
     pattern = r"arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)"
     matches = re.findall(pattern, msg)
     for arxiv_id in matches:
@@ -310,6 +310,8 @@ def get_embedding(
 
 
 class TinyDB:
+    """A tiny database that is secretly a Polars dataframe in a CSV file."""
+
     def __init__(
         self,
         filepath: str = DB_FILEPATH,
@@ -363,42 +365,6 @@ class TinyDB:
             return None
         return {column: value for column, value in zip(self.df.columns, match)}
 
-    def list_papers(self, sort_by: Optional[str] = "title") -> Dict[str, Any]:
-        if sort_by:
-            if sort_by in ["votes", "votes_count", "voting"]:
-                sort_by = "votes_count"
-            if sort_by in self.df.columns:
-                sorted_df = self.df.sort(by=sort_by, descending=True)
-            else:
-                raise ValueError(f"Column '{sort_by}' does not exist in the dataframe.")
-        else:
-            sorted_df = self.df
-        yield from sorted_df.iter_rows(named=True)
-
-    def vote_for_paper(self, paper: arxiv.Result, user: str):
-        user = str(user)
-        paper_id = paper.get_short_id()
-        paper_mask = self.df["id"] == paper_id
-        if paper_mask.sum() == 0:
-            return f"Paper with id {paper_id} is not in the database."
-        matches_df: pl.DataFrame = self.df.filter(paper_mask).head(1)
-        votes_raw: str = matches_df["votes"].to_list()[0]
-        votes: List[str] = []
-        if len(votes_raw) > 0:
-            votes = [str(_) for _ in votes_raw.split(",")]
-        if user in votes:
-            return f"User {user} has already voted for this paper."
-        votes.append(user)
-        matches_df = matches_df.with_columns(
-            pl.col("votes").apply(lambda _: ",".join(votes))
-        )
-        matches_df = matches_df.with_columns(
-            pl.col("votes_count").apply(lambda _: len(votes))
-        )
-        self.df.update(matches_df)
-        self.save()
-        return f"User {user} has voted for paper {paper_id}."
-
     def similarity_search(self, paper: arxiv.Result, k: int = 3):
         if self.df is None or len(self.df) == 0:
             return None
@@ -425,7 +391,7 @@ async def add_paper(
     db: TinyDB,
     **kwargs,
 ) -> None:
-    for paper in find_papers(msg.content):
+    for paper in find_paperid_in_msg(msg.content):
         log.info(f"Found paper: {paper.title}")
         id = paper.get_short_id()
         if _paper := db.get_papers(id):
@@ -433,7 +399,7 @@ async def add_paper(
             log.info(_msg)
             await channel.send(_msg)
         else:
-            db.add_paper(paper, user=msg.author.id)
+            db.add_paper(paper, user=str(msg.author.id))
             _msg = f"Adding paper {id}"
             log.info(_msg)
             await channel.send(_msg)
@@ -442,6 +408,8 @@ async def add_paper(
             await channel.send(_msg)
             embeds = []
             for _paper in db.similarity_search(paper):
+                if _paper["title"] == paper.title:
+                    continue
                 embeds.append(
                     discord.Embed(
                         title=_paper["title"],
@@ -450,6 +418,8 @@ async def add_paper(
                         f"{_paper['summary']}",
                     )
                 )
+            if len(embeds) == 0:
+                return
             _msg: str = f"Similar papers ({len(embeds)} total)"
             log.info(_msg)
             await channel.send(embeds=embeds)
@@ -463,9 +433,21 @@ async def list_papers(
     **kwargs,
 ) -> None:
     embeds = []
+    if db.df is None or len(db.df) == 0:
+        _msg = "No papers in database."
+        await channel.send(embeds=embeds)
+        log.info(f"Sending message: {_msg}")
+        return
     num_papers = kwargs.get("num_papers", 10)
-    sort_by = kwargs.get("sort_by")
-    for i, paper_dict in enumerate(db.list_papers(sort_by=sort_by)):
+    _df: pl.DataFrame = db.df
+    if sort_by := kwargs.get("sort_by"):
+        if sort_by in ["votes", "votes_count", "voting"]:
+            sort_by = "votes_count"
+        if sort_by in db.df.columns:
+            _df = _df.sort(by=sort_by, descending=True)
+        else:
+            raise ValueError(f"Column '{sort_by}' does not exist in the dataframe.")
+    for i, paper_dict in enumerate(_df.iter_rows(named=True)):
         if i >= num_papers:
             break
         embeds.append(
@@ -476,10 +458,9 @@ async def list_papers(
                 f"{paper_dict['summary']}",
             )
         )
-    _msg: str = f"Listing papers ({len(embeds)} total)"
-    log.info(_msg)
+    _msg: str = f"Found papers, listing ({len(embeds)} total)"
     await channel.send(embeds=embeds)
-
+    log.info(f"Sending message: {_msg}")
 
 @time_and_log
 async def vote_for_paper(
@@ -488,12 +469,38 @@ async def vote_for_paper(
     db: TinyDB,
     **kwargs,
 ) -> None:
-    for paper in find_papers(msg.content):
+    for paper in find_paperid_in_msg(msg.content):
         log.info(f"Found paper: {paper.title}")
-        _msg = db.vote_for_paper(paper, msg.author.id)
-        log.info(_msg)
+        paper_id = paper.get_short_id()
+        paper_mask = db.df["id"] == paper_id
+        if paper_mask.sum() == 0:
+            _msg =  f"Paper {paper_id} is not in the database."
+            await channel.send(_msg)
+            log.info(f"Sending message: {_msg}")
+            return
+        matches_df: pl.DataFrame = db.df.filter(paper_mask).head(1)
+        votes_raw: str = str(matches_df["votes"].to_list()[0])
+        votes: List[str] = []
+        if len(votes_raw) > 0:
+            votes = [str(_) for _ in votes_raw.split(",")]
+        user_id = str(msg.author.id)
+        if user_id in votes:
+            _msg =  f"{msg.author.name} has already voted for this paper."
+            await channel.send(_msg)
+            log.info(f"Sending message: {_msg}")
+            return
+        votes.append(user_id)
+        matches_df = matches_df.with_columns(
+            pl.col("votes").apply(lambda _: ",".join(votes))
+        )
+        matches_df = matches_df.with_columns(
+            pl.col("votes_count").apply(lambda _: len(votes))
+        )
+        db.df.update(matches_df)
+        db.save()
+        _msg =  f"User {msg.author.name} has voted for paper {paper_id}."
         await channel.send(_msg)
-
+        log.info(f"Sending message: {_msg}")
 
 @time_and_log
 async def share_sources(
@@ -581,7 +588,6 @@ async def chat(
 
 
 class PaperBot(discord.Client):
-
     def __init__(
         self,
         *args,
@@ -682,7 +688,8 @@ class PaperBot(discord.Client):
             # TODO: Return priority queue for papers
             # TODO: Weekly greetings, greetings based on dates/seasons
             # TODO: display author name rather than ID
-            # TODO: Render the csv file to markdown and post in on a github repo automatically `from github import Github`
+            # TODO: Render the csv file to markdown and post in on a github
+            #       repo automatically `from github import Github`
             # TODO: Announcements on the start of every week and the voting results.
             # Programmed death
             if datetime.now() - self.start_time > self.lifespan:

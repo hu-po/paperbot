@@ -6,6 +6,9 @@ __pycache__/
 # logs
 logs/
 
+# data
+data/
+
 # CSV files
 *.csv
 
