@@ -437,7 +437,7 @@ async def list_papers(
     embeds = []
     if db.df is None or len(db.df) == 0:
         _msg = "No papers in database."
-        await channel.send(embeds=embeds)
+        await channel.send(_msg)
         log.info(f"Sending message: {_msg}")
         return
     num_papers = kwargs.get("num_papers", 10)
@@ -448,7 +448,10 @@ async def list_papers(
         if sort_by in db.df.columns:
             _df = _df.sort(by=sort_by, descending=True)
         else:
-            raise ValueError(f"Column '{sort_by}' does not exist in the dataframe.")
+            _msg = f"Trying to sort by column '{sort_by}' which doesn't exist."
+            await channel.send(_msg)
+            log.info(f"Sending message: {_msg}")
+            return
     for i, paper_dict in enumerate(_df.iter_rows(named=True)):
         if i >= num_papers:
             break
