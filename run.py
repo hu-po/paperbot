@@ -52,8 +52,8 @@ DEBUG_MODE: bool = False
 DEBUG_LEVEL: int = logging.INFO
 DISCORD_CHANNEL: int = 1107745177264726036  # papers
 LIFESPAN: timedelta = timedelta(days=3)
-HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=5)
-MAX_MESSAGES: int = 3
+HEARTBEAT_INTERVAL: timedelta = timedelta(minutes=2)
+MAX_MESSAGES: int = 100
 MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
 # Debug Configuration
@@ -344,9 +344,8 @@ class TinyDB:
             "abstract": paper.summary,
             "summary": summarize_paper(paper),
             "tags": ",".join(paper.categories),
-            "user": user or "",
             "user_submitted_date": datetime.now().strftime(DATEFORMAT),
-            "votes": user or "",
+            "votes": str(user) or "",
             "votes_count": 1,
         }
         for i, val in enumerate(get_embedding(paper)):
