@@ -752,8 +752,9 @@ class PaperBot(discord.Client):
                     max_tokens=self.max_tokens,
                 )
             else:
-                _msg = "Could not recognize any behavior."
-                _msg += f"Try one of the following: {', '.join(self.behaviors.keys())}"
+                _msg = "Could not recognize a behavior from your message. Here is what I can do:\n"
+                for _behavior in self.behaviors.values():
+                    _msg += f"- {_behavior.name}: {_behavior.description}\n"
                 await self.get_channel(self.channel_id).send(_msg)
 
     async def on_disconnect(self):
