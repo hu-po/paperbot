@@ -53,7 +53,7 @@ DEBUG_LEVEL: int = logging.INFO
 DISCORD_CHANNEL: int = 1107745177264726036  # papers
 LIFESPAN: timedelta = timedelta(days=3)
 GREETING_MESSAGE_ENABLED: bool = True
-AUTO_MESSAGE_ENABLED: bool = False
+AUTO_MESSAGE_ENABLED: bool = True
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
 HEARTBEAT_INTERVAL: timedelta = timedelta(seconds=60)
 MAX_MESSAGES: int = 4
@@ -719,10 +719,11 @@ class PaperBot(discord.Client):
                 await self.close()
             # Send message to the channel if it's been a while
             if self.auto_message_enabled and datetime.now() - self.last_auto_message >= self.auto_message_interval:
+                self.last_auto_message = datetime.now()
                 _msg: str = gpt_text(
-                    prompt="Say something short and funny.",
+                    prompt="Say something hilarious.",
                     system=IAM,
-                    temperature=1,
+                    temperature=10,
                 )
                 await self.get_channel(self.channel_id).send(_msg)
                 log.info(f"Sent auto message: {_msg}")
