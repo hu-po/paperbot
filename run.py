@@ -51,9 +51,10 @@ DEBUG_MODE: bool = False
 # Normal Configuration
 DEBUG_LEVEL: int = logging.INFO
 DISCORD_CHANNEL: int = 1107745177264726036  # papers
-LIFESPAN: timedelta = timedelta(hours=6)
+LIFESPAN: timedelta = timedelta(days=3)
+GREETING_MESSAGE_ENABLED: bool = True
+AUTO_MESSAGE_ENABLED: bool = False
 AUTO_MESSAGES_INTERVAL: timedelta = timedelta(hours=1)
-GREETING_MESSAGE_ENABLED: bool = False
 HEARTBEAT_INTERVAL: timedelta = timedelta(seconds=60)
 MAX_MESSAGES: int = 4
 MAX_MESSAGES_INTERVAL: timedelta = timedelta(seconds=10)
@@ -67,6 +68,7 @@ if DEBUG_MODE:
     MAX_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
     AUTO_MESSAGES_INTERVAL: timedelta = timedelta(minutes=1)
     GREETING_MESSAGE_ENABLED: bool = True
+    AUTO_MESSAGE_ENABLED: bool = True
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 KEYS_DIR = os.path.join(ROOT_DIR, ".keys")
@@ -442,7 +444,7 @@ async def list_papers(
         await channel.send(_msg)
         log.info(f"Sending message: {_msg}")
         return
-    num_papers = kwargs.get("num_papers", 10)
+    num_papers = kwargs.get("num_papers", 4)
     _df: pl.DataFrame = db.df
     if sort_by := kwargs.get("sort_by"):
         if sort_by in ["votes", "votes_count", "voting"]:
@@ -601,6 +603,7 @@ class PaperBot(discord.Client):
         max_messages: int = MAX_MESSAGES,
         max_messages_interval: timedelta = MAX_MESSAGES_INTERVAL,
         auto_message_interval: timedelta = AUTO_MESSAGES_INTERVAL,
+        auto_message_enabled: bool = AUTO_MESSAGE_ENABLED,
         greeting_message_enabled: bool = GREETING_MESSAGE_ENABLED,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -620,6 +623,7 @@ class PaperBot(discord.Client):
         self.max_messages_interval: timedelta = max_messages_interval
         self.message_cache: Dict[str, discord.Message] = {}
         self.greetings_message_enabled: bool = greeting_message_enabled
+        self.auto_message_enabled: bool = auto_message_enabled
         self.auto_message_interval: timedelta = auto_message_interval
         self.last_auto_message: datetime = datetime.now()
         self.behaviors: Dict[str, Behavior] = {}
@@ -714,7 +718,7 @@ class PaperBot(discord.Client):
                 log.info(f"Sent goodbye message: {_msg}")
                 await self.close()
             # Send message to the channel if it's been a while
-            if datetime.now() - self.last_auto_message >= self.auto_message_interval:
+            if self.auto_message_enabled and datetime.now() - self.last_auto_message >= self.auto_message_interval:
                 _msg: str = gpt_text(
                     prompt="Say something short and funny.",
                     system=IAM,
