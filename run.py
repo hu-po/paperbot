@@ -772,8 +772,12 @@ class PaperBot(discord.Client):
                 await self.get_channel(self.channel_id).send(_msg)
 
     async def on_disconnect(self):
-        await self.get_channel(self.channel_id).send("🪦")
         log.info("Disconnected.")
+    
+    async def close(self):
+        await self.get_channel(self.channel_id).send("🪦")
+        return await super().close()
+        
 
 
 if __name__ == "__main__":
@@ -787,3 +791,4 @@ if __name__ == "__main__":
     intents.message_content = True
     bot = PaperBot(intents=intents)
     bot.run(set_discord_key())
+    log.info(f"Bot stopped on {datetime.now().strftime(DATEFORMAT)}")
